@@ -1,0 +1,471 @@
+# Phase 2: dual ISP, RR pair per ISP, MPLS L3VPN, INTERNET VRF hub-and-spoke
+name: isp-lab
+mgmt:
+  network: clab-mgmt
+  ipv4-subnet: 172.31.255.0/24
+topology:
+  nodes:
+    inet-r1:
+      kind: linux
+      image: quay.io/frrouting/frr:10.0.0
+      binds:
+      - configs/inet-r1/frr.conf:/etc/frr/frr.conf
+      - configs/common/daemons:/etc/frr/daemons
+      - configs/common/vtysh.conf:/etc/frr/vtysh.conf
+      exec:
+      - ip route del default
+      - sysctl -w net.ipv4.ip_forward=1
+    br-inet:
+      kind: bridge
+    dns1:
+      kind: linux
+      image: alpine:3.20
+      cmd: tail -f /dev/null
+      binds:
+      - configs/dns/dnsmasq.conf:/etc/dnsmasq.conf
+      exec:
+      - apk add --no-cache dnsmasq iproute2
+      - ip addr add 1.1.1.1/28 dev eth1
+      - ip route replace default via 1.1.1.14 dev eth1
+      - dnsmasq
+    dns2:
+      kind: linux
+      image: alpine:3.20
+      cmd: tail -f /dev/null
+      binds:
+      - configs/dns/dnsmasq.conf:/etc/dnsmasq.conf
+      exec:
+      - apk add --no-cache dnsmasq iproute2
+      - ip addr add 1.1.1.2/28 dev eth1
+      - ip route replace default via 1.1.1.14 dev eth1
+      - dnsmasq
+    web1:
+      kind: linux
+      image: ghcr.io/hellt/network-multitool
+      binds:
+      - configs/common/webhost.sh:/usr/local/bin/netlab-web:ro
+      exec:
+      - ip addr add 1.1.1.3/28 dev eth1
+      - ip route replace default via 1.1.1.14 dev eth1
+      - sh /usr/local/bin/netlab-web
+    isp1-core1:
+      kind: linux
+      image: quay.io/frrouting/frr:10.0.0
+      binds:
+      - configs/isp1-core1/frr.conf:/etc/frr/frr.conf
+      - configs/common/daemons:/etc/frr/daemons
+      - configs/common/vtysh.conf:/etc/frr/vtysh.conf
+      exec:
+      - ip route del default
+      - sysctl -w net.ipv4.ip_forward=1
+      - sysctl -w net.mpls.platform_labels=1048575
+      - sysctl -w net.mpls.conf.eth2.input=1
+      - sysctl -w net.mpls.conf.eth3.input=1
+      - sysctl -w net.mpls.conf.eth4.input=1
+      - sysctl -w net.mpls.conf.eth5.input=1
+      - sysctl -w net.ipv4.tcp_l3mdev_accept=1
+      - sysctl -w net.ipv4.udp_l3mdev_accept=1
+      - ip link add INTERNET type vrf table 999
+      - ip link set INTERNET up
+      - ip link set eth1 master INTERNET
+      - ip addr add 1.1.255.2/30 dev eth1
+    isp1-core2:
+      kind: linux
+      image: quay.io/frrouting/frr:10.0.0
+      binds:
+      - configs/isp1-core2/frr.conf:/etc/frr/frr.conf
+      - configs/common/daemons:/etc/frr/daemons
+      - configs/common/vtysh.conf:/etc/frr/vtysh.conf
+      exec:
+      - ip route del default
+      - sysctl -w net.ipv4.ip_forward=1
+      - sysctl -w net.mpls.platform_labels=1048575
+      - sysctl -w net.mpls.conf.eth2.input=1
+      - sysctl -w net.mpls.conf.eth3.input=1
+      - sysctl -w net.mpls.conf.eth4.input=1
+      - sysctl -w net.mpls.conf.eth5.input=1
+      - sysctl -w net.ipv4.tcp_l3mdev_accept=1
+      - sysctl -w net.ipv4.udp_l3mdev_accept=1
+      - ip link add INTERNET type vrf table 999
+      - ip link set INTERNET up
+      - ip link set eth1 master INTERNET
+      - ip addr add 1.1.255.6/30 dev eth1
+    isp1-pe-a:
+      kind: linux
+      image: quay.io/frrouting/frr:10.0.0
+      binds:
+      - configs/isp1-pe-a/frr.conf:/etc/frr/frr.conf
+      - configs/common/daemons:/etc/frr/daemons
+      - configs/common/vtysh.conf:/etc/frr/vtysh.conf
+      exec:
+      - ip route del default
+      - sysctl -w net.ipv4.ip_forward=1
+      - sysctl -w net.mpls.platform_labels=1048575
+      - sysctl -w net.mpls.conf.eth1.input=1
+      - sysctl -w net.mpls.conf.eth2.input=1
+      - sysctl -w net.ipv4.tcp_l3mdev_accept=1
+      - sysctl -w net.ipv4.udp_l3mdev_accept=1
+      - ip link add C1A type vrf table 1001
+      - ip link set C1A up
+      - ip link set eth3 master C1A
+      - ip addr add 81.10.1.1/30 dev eth3
+    c1a-r1:
+      kind: linux
+      image: quay.io/frrouting/frr:10.0.0
+      binds:
+      - configs/c1a-r1/frr.conf:/etc/frr/frr.conf
+      - configs/common/daemons:/etc/frr/daemons
+      - configs/common/vtysh.conf:/etc/frr/vtysh.conf
+      exec:
+      - ip route del default
+      - sysctl -w net.ipv4.ip_forward=1
+    c1a-web:
+      kind: linux
+      image: ghcr.io/hellt/network-multitool
+      binds:
+      - configs/common/webhost.sh:/usr/local/bin/netlab-web:ro
+      exec:
+      - ip addr add 81.10.100.2/29 dev eth1
+      - ip route replace default via 81.10.100.1 dev eth1
+      - sh -c "echo nameserver 1.1.1.1 > /etc/resolv.conf"
+      - sh /usr/local/bin/netlab-web
+    isp1-pe-b:
+      kind: linux
+      image: quay.io/frrouting/frr:10.0.0
+      binds:
+      - configs/isp1-pe-b/frr.conf:/etc/frr/frr.conf
+      - configs/common/daemons:/etc/frr/daemons
+      - configs/common/vtysh.conf:/etc/frr/vtysh.conf
+      exec:
+      - ip route del default
+      - sysctl -w net.ipv4.ip_forward=1
+      - sysctl -w net.mpls.platform_labels=1048575
+      - sysctl -w net.mpls.conf.eth1.input=1
+      - sysctl -w net.mpls.conf.eth2.input=1
+      - sysctl -w net.ipv4.tcp_l3mdev_accept=1
+      - sysctl -w net.ipv4.udp_l3mdev_accept=1
+      - ip link add C1B type vrf table 1002
+      - ip link set C1B up
+      - ip link set eth3 master C1B
+      - ip addr add 81.10.2.1/30 dev eth3
+    c1b-r1:
+      kind: linux
+      image: quay.io/frrouting/frr:10.0.0
+      binds:
+      - configs/c1b-r1/frr.conf:/etc/frr/frr.conf
+      - configs/common/daemons:/etc/frr/daemons
+      - configs/common/vtysh.conf:/etc/frr/vtysh.conf
+      exec:
+      - ip route del default
+      - sysctl -w net.ipv4.ip_forward=1
+    c1b-web:
+      kind: linux
+      image: ghcr.io/hellt/network-multitool
+      binds:
+      - configs/common/webhost.sh:/usr/local/bin/netlab-web:ro
+      exec:
+      - ip addr add 81.10.100.10/29 dev eth1
+      - ip route replace default via 81.10.100.9 dev eth1
+      - sh -c "echo nameserver 1.1.1.1 > /etc/resolv.conf"
+      - sh /usr/local/bin/netlab-web
+    isp1-pe-c:
+      kind: linux
+      image: quay.io/frrouting/frr:10.0.0
+      binds:
+      - configs/isp1-pe-c/frr.conf:/etc/frr/frr.conf
+      - configs/common/daemons:/etc/frr/daemons
+      - configs/common/vtysh.conf:/etc/frr/vtysh.conf
+      exec:
+      - ip route del default
+      - sysctl -w net.ipv4.ip_forward=1
+      - sysctl -w net.mpls.platform_labels=1048575
+      - sysctl -w net.mpls.conf.eth1.input=1
+      - sysctl -w net.mpls.conf.eth2.input=1
+      - sysctl -w net.ipv4.tcp_l3mdev_accept=1
+      - sysctl -w net.ipv4.udp_l3mdev_accept=1
+      - ip link add C1C type vrf table 1003
+      - ip link set C1C up
+      - ip link set eth3 master C1C
+      - ip addr add 81.10.3.1/30 dev eth3
+    c1c-r1:
+      kind: linux
+      image: quay.io/frrouting/frr:10.0.0
+      binds:
+      - configs/c1c-r1/frr.conf:/etc/frr/frr.conf
+      - configs/common/daemons:/etc/frr/daemons
+      - configs/common/vtysh.conf:/etc/frr/vtysh.conf
+      exec:
+      - ip route del default
+      - sysctl -w net.ipv4.ip_forward=1
+    c1c-web:
+      kind: linux
+      image: ghcr.io/hellt/network-multitool
+      binds:
+      - configs/common/webhost.sh:/usr/local/bin/netlab-web:ro
+      exec:
+      - ip addr add 81.10.100.18/29 dev eth1
+      - ip route replace default via 81.10.100.17 dev eth1
+      - sh -c "echo nameserver 1.1.1.1 > /etc/resolv.conf"
+      - sh /usr/local/bin/netlab-web
+    isp2-core1:
+      kind: linux
+      image: quay.io/frrouting/frr:10.0.0
+      binds:
+      - configs/isp2-core1/frr.conf:/etc/frr/frr.conf
+      - configs/common/daemons:/etc/frr/daemons
+      - configs/common/vtysh.conf:/etc/frr/vtysh.conf
+      exec:
+      - ip route del default
+      - sysctl -w net.ipv4.ip_forward=1
+      - sysctl -w net.mpls.platform_labels=1048575
+      - sysctl -w net.mpls.conf.eth2.input=1
+      - sysctl -w net.mpls.conf.eth3.input=1
+      - sysctl -w net.mpls.conf.eth4.input=1
+      - sysctl -w net.mpls.conf.eth5.input=1
+      - sysctl -w net.ipv4.tcp_l3mdev_accept=1
+      - sysctl -w net.ipv4.udp_l3mdev_accept=1
+      - ip link add INTERNET type vrf table 999
+      - ip link set INTERNET up
+      - ip link set eth1 master INTERNET
+      - ip addr add 1.1.255.10/30 dev eth1
+    isp2-core2:
+      kind: linux
+      image: quay.io/frrouting/frr:10.0.0
+      binds:
+      - configs/isp2-core2/frr.conf:/etc/frr/frr.conf
+      - configs/common/daemons:/etc/frr/daemons
+      - configs/common/vtysh.conf:/etc/frr/vtysh.conf
+      exec:
+      - ip route del default
+      - sysctl -w net.ipv4.ip_forward=1
+      - sysctl -w net.mpls.platform_labels=1048575
+      - sysctl -w net.mpls.conf.eth2.input=1
+      - sysctl -w net.mpls.conf.eth3.input=1
+      - sysctl -w net.mpls.conf.eth4.input=1
+      - sysctl -w net.mpls.conf.eth5.input=1
+      - sysctl -w net.ipv4.tcp_l3mdev_accept=1
+      - sysctl -w net.ipv4.udp_l3mdev_accept=1
+      - ip link add INTERNET type vrf table 999
+      - ip link set INTERNET up
+      - ip link set eth1 master INTERNET
+      - ip addr add 1.1.255.14/30 dev eth1
+    isp2-pe-a:
+      kind: linux
+      image: quay.io/frrouting/frr:10.0.0
+      binds:
+      - configs/isp2-pe-a/frr.conf:/etc/frr/frr.conf
+      - configs/common/daemons:/etc/frr/daemons
+      - configs/common/vtysh.conf:/etc/frr/vtysh.conf
+      exec:
+      - ip route del default
+      - sysctl -w net.ipv4.ip_forward=1
+      - sysctl -w net.mpls.platform_labels=1048575
+      - sysctl -w net.mpls.conf.eth1.input=1
+      - sysctl -w net.mpls.conf.eth2.input=1
+      - sysctl -w net.ipv4.tcp_l3mdev_accept=1
+      - sysctl -w net.ipv4.udp_l3mdev_accept=1
+      - ip link add C2A type vrf table 1001
+      - ip link set C2A up
+      - ip link set eth3 master C2A
+      - ip addr add 92.20.1.1/30 dev eth3
+    c2a-r1:
+      kind: linux
+      image: quay.io/frrouting/frr:10.0.0
+      binds:
+      - configs/c2a-r1/frr.conf:/etc/frr/frr.conf
+      - configs/common/daemons:/etc/frr/daemons
+      - configs/common/vtysh.conf:/etc/frr/vtysh.conf
+      exec:
+      - ip route del default
+      - sysctl -w net.ipv4.ip_forward=1
+    c2a-web:
+      kind: linux
+      image: ghcr.io/hellt/network-multitool
+      binds:
+      - configs/common/webhost.sh:/usr/local/bin/netlab-web:ro
+      exec:
+      - ip addr add 92.20.100.2/29 dev eth1
+      - ip route replace default via 92.20.100.1 dev eth1
+      - sh -c "echo nameserver 1.1.1.1 > /etc/resolv.conf"
+      - sh /usr/local/bin/netlab-web
+    isp2-pe-b:
+      kind: linux
+      image: quay.io/frrouting/frr:10.0.0
+      binds:
+      - configs/isp2-pe-b/frr.conf:/etc/frr/frr.conf
+      - configs/common/daemons:/etc/frr/daemons
+      - configs/common/vtysh.conf:/etc/frr/vtysh.conf
+      exec:
+      - ip route del default
+      - sysctl -w net.ipv4.ip_forward=1
+      - sysctl -w net.mpls.platform_labels=1048575
+      - sysctl -w net.mpls.conf.eth1.input=1
+      - sysctl -w net.mpls.conf.eth2.input=1
+      - sysctl -w net.ipv4.tcp_l3mdev_accept=1
+      - sysctl -w net.ipv4.udp_l3mdev_accept=1
+      - ip link add C2B type vrf table 1002
+      - ip link set C2B up
+      - ip link set eth3 master C2B
+      - ip addr add 92.20.2.1/30 dev eth3
+    c2b-r1:
+      kind: linux
+      image: quay.io/frrouting/frr:10.0.0
+      binds:
+      - configs/c2b-r1/frr.conf:/etc/frr/frr.conf
+      - configs/common/daemons:/etc/frr/daemons
+      - configs/common/vtysh.conf:/etc/frr/vtysh.conf
+      exec:
+      - ip route del default
+      - sysctl -w net.ipv4.ip_forward=1
+    c2b-web:
+      kind: linux
+      image: ghcr.io/hellt/network-multitool
+      binds:
+      - configs/common/webhost.sh:/usr/local/bin/netlab-web:ro
+      exec:
+      - ip addr add 92.20.100.10/29 dev eth1
+      - ip route replace default via 92.20.100.9 dev eth1
+      - sh -c "echo nameserver 1.1.1.1 > /etc/resolv.conf"
+      - sh /usr/local/bin/netlab-web
+    isp2-pe-c:
+      kind: linux
+      image: quay.io/frrouting/frr:10.0.0
+      binds:
+      - configs/isp2-pe-c/frr.conf:/etc/frr/frr.conf
+      - configs/common/daemons:/etc/frr/daemons
+      - configs/common/vtysh.conf:/etc/frr/vtysh.conf
+      exec:
+      - ip route del default
+      - sysctl -w net.ipv4.ip_forward=1
+      - sysctl -w net.mpls.platform_labels=1048575
+      - sysctl -w net.mpls.conf.eth1.input=1
+      - sysctl -w net.mpls.conf.eth2.input=1
+      - sysctl -w net.ipv4.tcp_l3mdev_accept=1
+      - sysctl -w net.ipv4.udp_l3mdev_accept=1
+      - ip link add C2C type vrf table 1003
+      - ip link set C2C up
+      - ip link set eth3 master C2C
+      - ip addr add 92.20.3.1/30 dev eth3
+    c2c-r1:
+      kind: linux
+      image: quay.io/frrouting/frr:10.0.0
+      binds:
+      - configs/c2c-r1/frr.conf:/etc/frr/frr.conf
+      - configs/common/daemons:/etc/frr/daemons
+      - configs/common/vtysh.conf:/etc/frr/vtysh.conf
+      exec:
+      - ip route del default
+      - sysctl -w net.ipv4.ip_forward=1
+    c2c-web:
+      kind: linux
+      image: ghcr.io/hellt/network-multitool
+      binds:
+      - configs/common/webhost.sh:/usr/local/bin/netlab-web:ro
+      exec:
+      - ip addr add 92.20.100.18/29 dev eth1
+      - ip route replace default via 92.20.100.17 dev eth1
+      - sh -c "echo nameserver 1.1.1.1 > /etc/resolv.conf"
+      - sh /usr/local/bin/netlab-web
+  links:
+  - endpoints:
+    - inet-r1:eth1
+    - isp1-core1:eth1
+  - endpoints:
+    - inet-r1:eth2
+    - isp1-core2:eth1
+  - endpoints:
+    - inet-r1:eth3
+    - isp2-core1:eth1
+  - endpoints:
+    - inet-r1:eth4
+    - isp2-core2:eth1
+  - endpoints:
+    - inet-r1:eth5
+    - br-inet:bi-inet-r1
+  - endpoints:
+    - dns1:eth1
+    - br-inet:bi-dns1
+  - endpoints:
+    - dns2:eth1
+    - br-inet:bi-dns2
+  - endpoints:
+    - web1:eth1
+    - br-inet:bi-web1
+  - endpoints:
+    - isp1-core1:eth2
+    - isp1-core2:eth2
+  - endpoints:
+    - isp1-core1:eth3
+    - isp1-pe-a:eth1
+  - endpoints:
+    - isp1-core1:eth4
+    - isp1-pe-b:eth1
+  - endpoints:
+    - isp1-core1:eth5
+    - isp1-pe-c:eth1
+  - endpoints:
+    - isp1-core2:eth3
+    - isp1-pe-a:eth2
+  - endpoints:
+    - isp1-core2:eth4
+    - isp1-pe-b:eth2
+  - endpoints:
+    - isp1-core2:eth5
+    - isp1-pe-c:eth2
+  - endpoints:
+    - isp1-pe-a:eth3
+    - c1a-r1:eth1
+  - endpoints:
+    - c1a-r1:eth2
+    - c1a-web:eth1
+  - endpoints:
+    - isp1-pe-b:eth3
+    - c1b-r1:eth1
+  - endpoints:
+    - c1b-r1:eth2
+    - c1b-web:eth1
+  - endpoints:
+    - isp1-pe-c:eth3
+    - c1c-r1:eth1
+  - endpoints:
+    - c1c-r1:eth2
+    - c1c-web:eth1
+  - endpoints:
+    - isp2-core1:eth2
+    - isp2-core2:eth2
+  - endpoints:
+    - isp2-core1:eth3
+    - isp2-pe-a:eth1
+  - endpoints:
+    - isp2-core1:eth4
+    - isp2-pe-b:eth1
+  - endpoints:
+    - isp2-core1:eth5
+    - isp2-pe-c:eth1
+  - endpoints:
+    - isp2-core2:eth3
+    - isp2-pe-a:eth2
+  - endpoints:
+    - isp2-core2:eth4
+    - isp2-pe-b:eth2
+  - endpoints:
+    - isp2-core2:eth5
+    - isp2-pe-c:eth2
+  - endpoints:
+    - isp2-pe-a:eth3
+    - c2a-r1:eth1
+  - endpoints:
+    - c2a-r1:eth2
+    - c2a-web:eth1
+  - endpoints:
+    - isp2-pe-b:eth3
+    - c2b-r1:eth1
+  - endpoints:
+    - c2b-r1:eth2
+    - c2b-web:eth1
+  - endpoints:
+    - isp2-pe-c:eth3
+    - c2c-r1:eth1
+  - endpoints:
+    - c2c-r1:eth2
+    - c2c-web:eth1

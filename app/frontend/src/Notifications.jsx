@@ -1,0 +1,116 @@
+import { useState } from "react";
+import { api } from "./api.js";
+import { Icon, useInterval, fmtBps } from "./ui.jsx";
+
+const ago = (ts) => {
+  const s = Math.max(0, Date.now() / 1000 - ts);
+  return s < 60 ? `${Math.floor(s)}s ago` : s < 3600 ? `${Math.floor(s / 60)}m ago` : s < 86400 ? `${Math.floor(s / 3600)}h ago` : new Date(ts * 1000).toLocaleString();
+};
+const dur = (a, b) => { const s = Math.max(0, (b || Date.now() / 1000) - a); return s < 60 ? `${Math.round(s)}s` : s < 3600 ? `${Math.round(s / 60)}m` : `${(s / 3600).toFixed(1)}h`; };
+
+export function NotificationsPanel({ onClose, onGoto, notify, onSettings, refreshKey }) {
+  const [tab, setTab] = useState("active");
+  const [rows, setRows] = useState([]);
+  const load = () => api.alerts(tab === "active" ? "firing" : "").then(setRows).catch(() => {});
+  useInterval(load, 5000, [tab, refreshKey]);
+  const ack = async (id) => { await api.ack(id).catch((e) => notify(e.message, null, "bad")); load(); };
+  return (
+    <aside className="dash notif" aria-label="Notifications">
+      <header className="dash-head"><Icon name="bell" /><h2>Notifications</h2><span className="hint" />
+        <button className="icon-btn" onClick={onSettings} title="Alert rules"><Icon name="gear" /></button>
+        <button className="icon-btn" onClick={onClose} aria-label="Close"><Icon name="x" /></button></header>
+      <div className="row notif-bar">
+        <div className="seg"><button className={tab === "active" ? "on" : ""} onClick={() => setTab("active")}>Active</button><button className={tab === "all" ? "on" : ""} onClick={() => setTab("all")}>History</button></div>
+        <span className="grow" />
+        {tab === "active" && <button onClick={() => ack(null)} disabled={!rows.some((r) => !r.acked)}>Acknowledge all</button>}
+        {tab === "all" && <button onClick={async () => { const r = await api.clearResolved(); notify(`Cleared ${r.deleted} resolved alerts`); load(); }}>Clear resolved</button>}
+      </div>
+      <div className="notif-list">
+        {rows.map((r) => (
+          <div key={r.id} className={`alert al-${r.severity} ${r.state} ${r.acked ? "acked" : ""}`}>
+            <span className="al-dot" />
+            <div className="al-body">
+              <div className="al-top"><b>{r.rule}</b><span className={`schip ${r.severity === "critical" ? "s-bad" : r.severity === "warning" ? "s-warn" : "s-ok"}`}>{r.severity}</span>
+                {r.state === "resolved" && <span className="schip s-ok">resolved</span>}{r.acked ? <span className="hint">acked</span> : null}</div>
+              <div>{r.message}</div>
+              <div className="hint">
+                <button className="link" onClick={() => onGoto(r.lab, r.node)}>{r.lab} · {r.node}</button>
+                {" · "}{ago(r.started)}{" · "}{r.state === "resolved" ? `lasted ${dur(r.started, r.resolved)}` : `for ${dur(r.started)}`}
+              </div>
+            </div>
+            {r.state === "firing" && !r.acked && <button className="link" onClick={() => ack(r.id)}>Ack</button>}
+          </div>
+        ))}
+        {!rows.length && <p className="empty">{tab === "active" ? "All clear. Nothing is firing." : "No alert history yet."}</p>}
+      </div>
+    </aside>
+  );
+}
+
+export function TrafficPanel({ lab, states, onClose, notify, preset }) {
+  const hosts = lab.nodes.filter((n) => states[n.id] === "running" && (n.raw || {}).kind !== "bridge");
+  const [f, setF] = useState({ src: preset?.src || "", dst: "", proto: "tcp", rate_mbps: "", duration: 20, streams: 1, reverse: false });
+  const [jobs, setJobs] = useState([]);
+  useInterval(() => api.traffic(lab.name).then(setJobs).catch(() => {}), 2000, [lab.name]);
+  const start = async () => {
+    try { const j = await api.trafficStart(lab.name, { ...f, rate_mbps: Number(f.rate_mbps) || 0 }); notify(`Traffic ${j.src} → ${j.dst} (${j.target}) started`, null, "ok"); }
+    catch (e) { notify(e.message, null, "bad"); }
+  };
+  const set = (k) => (e) => setF({ ...f, [k]: e.target.type === "checkbox" ? e.target.checked : e.target.value });
+  return (
+    <aside className="dash traffic" aria-label="Traffic generator">
+      <header className="dash-head"><Icon name="flow" /><h2>Traffic generator</h2><span className="hint">iperf3</span>
+        <button className="icon-btn" onClick={onClose} aria-label="Close"><Icon name="x" /></button></header>
+      <div className="dash-sec">
+        <div className="tg-grid">
+          <label>From<select value={f.src} onChange={set("src")}><option value="">source…</option>{hosts.map((n) => <option key={n.id}>{n.id}</option>)}</select></label>
+          <label>To<select value={f.dst} onChange={set("dst")}><option value="">destination…</option>{hosts.filter((n) => n.id !== f.src).map((n) => <option key={n.id}>{n.id}</option>)}</select></label>
+          <label>Protocol<div className="seg">{["tcp", "udp"].map((p) => <button key={p} className={f.proto === p ? "on" : ""} onClick={() => setF({ ...f, proto: p })}>{p.toUpperCase()}</button>)}</div></label>
+          <label>Rate<span className="nowrap"><input className="narrow" type="number" min="0" placeholder={f.proto === "udp" ? "10" : "max"} value={f.rate_mbps} onChange={set("rate_mbps")} /> Mb/s</span></label>
+          <label>Duration<span className="nowrap"><input className="narrow" type="number" min="1" max="3600" value={f.duration} onChange={set("duration")} /> s</span></label>
+          <label>Streams<input className="narrow" type="number" min="1" max="16" value={f.streams} onChange={set("streams")} /></label>
+        </div>
+        <label className="chk"><input type="checkbox" checked={f.reverse} onChange={set("reverse")} /> Reverse (destination sends to source)</label>
+        <div className="row"><button className="primary" disabled={!f.src || !f.dst} onClick={start}><Icon name="play" size={14} /> Start</button>
+          <span className="hint">The destination's first lab address is used. Watch it on the canvas with the traffic overlay (O).</span></div>
+      </div>
+      <div className="dash-sec">
+        <h3>Jobs</h3>
+        {jobs.map((j) => (
+          <div key={j.id} className={`job job-${j.state}`}>
+            <div className="row nowrap"><b>{j.src} → {j.dst}</b><span className="hint mono">{j.target} · {j.proto.toUpperCase()}{j.rate_mbps ? ` · ${j.rate_mbps} Mb/s` : ""}{j.streams > 1 ? ` · ${j.streams}×` : ""}{j.reverse ? " · reverse" : ""}</span>
+              <span className="grow" /><span className={`schip ${j.state === "done" ? "s-ok" : j.state === "failed" ? "s-bad" : "s-warn"}`}>{j.state}</span>
+              {["starting", "running"].includes(j.state) && <button className="link danger" onClick={() => api.trafficStop(lab.name, j.id)}>Stop</button>}</div>
+            {["starting", "running"].includes(j.state) && <div className="bar"><span style={{ width: `${(j.elapsed / j.duration) * 100}%` }} /></div>}
+            {j.result && <div className="mono job-r">{fmtBps(j.result.bps)}
+              {j.result.retransmits != null && ` · ${j.result.retransmits} retransmits`}
+              {j.result.lost_percent != null && ` · ${j.result.lost_percent.toFixed(2)}% loss · ${j.result.jitter_ms?.toFixed(2)} ms jitter`}</div>}
+            {j.error && <div className="error">{j.error}</div>}
+          </div>
+        ))}
+        {!jobs.length && <p className="hint">No runs yet. Try a UDP stream through an impaired link and compare loss with the netem setting.</p>}
+      </div>
+    </aside>
+  );
+}
+
+export function Login({ onDone }) {
+  const [pw, setPw] = useState("");
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const go = async (e) => {
+    e.preventDefault(); setBusy(true); setErr("");
+    try { await api.login(pw); onDone(); } catch (x) { setErr(x.message); }
+    setBusy(false);
+  };
+  return (
+    <div className="login">
+      <form className="login-card" onSubmit={go}>
+        <div className="brand"><svg width="26" height="26" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="3" /><circle cx="19" cy="5" r="3" /><circle cx="19" cy="19" r="3" /><path d="M7.6 10.6l8.8-4.2M7.6 13.4l8.8 4.2" /></svg>netlab</div>
+        <label className="col">Password<input type="password" autoFocus value={pw} onChange={(e) => setPw(e.target.value)} autoComplete="current-password" /></label>
+        {err && <p className="error">{err}</p>}
+        <button className="primary big" disabled={busy || !pw}>Sign in</button>
+      </form>
+    </div>
+  );
+}

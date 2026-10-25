@@ -1,0 +1,136 @@
+"""Global settings, stored in <data parent>/settings.json (default /opt/netlab/settings.json).
+
+Everything has a default, so a missing or partial file is fine. Environment variables
+still override the matching value (NETLAB_FRR_IMAGE etc.) for container deployments.
+"""
+import copy, json, os, threading
+from pathlib import Path
+
+DATA = Path(os.environ.get("NETLAB_DATA", "/opt/netlab/labs"))
+FILE = Path(os.environ.get("NETLAB_SETTINGS", DATA.parent / "settings.json"))
+_LOCK = threading.Lock()
+
+DEFAULT_RULES = [
+    {"id": "r-container", "name": "Device stopped", "type": "container_down", "severity": "critical", "for_s": 0, "enabled": True},
+    {"id": "r-link", "name": "Link down", "type": "link_down", "severity": "warning", "for_s": 10, "enabled": True},
+    {"id": "r-bgp", "name": "BGP session down", "type": "bgp_down", "severity": "critical", "for_s": 30, "enabled": True},
+    {"id": "r-ospf", "name": "OSPF neighbour lost", "type": "ospf_down", "severity": "critical", "for_s": 30, "enabled": True},
+    {"id": "r-ldp", "name": "LDP session down", "type": "ldp_down", "severity": "warning", "for_s": 30, "enabled": True},
+    {"id": "r-cpu", "name": "High CPU", "type": "cpu_high", "threshold": 80, "severity": "warning", "for_s": 60, "enabled": True},
+    {"id": "r-err", "name": "Interface errors increasing", "type": "errors_rising", "threshold": 1, "severity": "warning", "for_s": 0, "enabled": True},
+]
+
+DEFAULTS = {
+    "general": {"live_edit": True},
+    "lab_defaults": {"frr_image": "quay.io/frrouting/frr:10.0.0", "pc_image": "ghcr.io/hellt/network-multitool",
+                     "alpine_image": "alpine:3.20", "mgmt_network": "clab-mgmt", "mgmt_subnet": "172.31.255.0/24", "link_mtu": 9500},
+    "monitoring": {"interval": 10, "retention_hours": 48, "health_interval": 30},
+    "snapshots": {"auto_before_deploy": True, "keep_auto": 20},
+    "alerts": {"enabled": True, "grace_s": 120, "rules": DEFAULT_RULES},
+    "notifications": {"toast_min_severity": "warning", "toast_resolved": True, "sound": False},
+    "security": {"auth_enabled": False, "password_hash": "", "session_hours": 12},
+}
+ENV = {("lab_defaults", "frr_image"): "NETLAB_FRR_IMAGE", ("lab_defaults", "pc_image"): "NETLAB_PC_IMAGE",
+       ("lab_defaults", "alpine_image"): "NETLAB_ALPINE_IMAGE", ("lab_defaults", "mgmt_network"): "NETLAB_MGMT_NETWORK",
+       ("lab_defaults", "mgmt_subnet"): "NETLAB_MGMT_SUBNET", ("monitoring", "interval"): "NETLAB_METRICS_INTERVAL",
+       ("monitoring", "retention_hours"): "NETLAB_METRICS_RETENTION_H"}
+SEVERITIES = ["info", "warning", "critical"]
+RULE_TYPES = {
+    "container_down": "Device stopped or missing", "link_down": "Link down (operational, not admin-down)",
+    "bgp_down": "BGP session not Established", "ospf_down": "OSPF neighbour not Full", "ldp_down": "LDP session not Operational",
+    "cpu_high": "CPU above threshold (%)", "mem_high": "Memory above threshold (MB)", "link_util": "Link throughput above threshold (Mb/s)",
+    "errors_rising": "Interface errors increasing (per sample)", "drops_rising": "Interface drops increasing (per sample)",
+    "probe_loss": "Ping probe loss above threshold (%)", "probe_rtt": "Ping probe RTT above threshold (ms)",
+}
+
+_cache = None
+
+
+def _merge(base, over):
+    out = copy.deepcopy(base)
+    for k, v in (over or {}).items():
+        out[k] = _merge(out[k], v) if isinstance(out.get(k), dict) and isinstance(v, dict) else v
+    return out
+
+
+def load() -> dict:
+    global _cache
+    with _LOCK:
+        if _cache is None:
+            try:
+                raw = json.loads(FILE.read_text())
+            except (OSError, ValueError):
+                raw = {}
+            _cache = _merge(DEFAULTS, raw)
+        s = copy.deepcopy(_cache)
+    for (sec, key), env in ENV.items():
+        if os.environ.get(env):
+            v = os.environ[env]
+            s[sec][key] = type(DEFAULTS[sec][key])(v) if not isinstance(DEFAULTS[sec][key], str) else v
+    return s
+
+
+def get(path: str, default=None):
+    cur = load()
+    for p in path.split("."):
+        if not isinstance(cur, dict) or p not in cur:
+            return default
+        cur = cur[p]
+    return cur
+
+
+def validate(s: dict) -> dict:
+    s = _merge(DEFAULTS, s)
+    s["security"].pop("password_set", None)
+    m = s["monitoring"]
+    m["interval"] = max(2, min(300, float(m["interval"])))
+    m["retention_hours"] = max(1, min(24 * 30, float(m["retention_hours"])))
+    m["health_interval"] = max(10, min(600, float(m["health_interval"])))
+    s["lab_defaults"]["link_mtu"] = int(max(1280, min(9500, int(s["lab_defaults"]["link_mtu"]))))
+    s["snapshots"]["keep_auto"] = int(max(1, min(500, int(s["snapshots"]["keep_auto"]))))
+    s["alerts"]["grace_s"] = max(0, min(3600, float(s["alerts"]["grace_s"])))
+    if s["notifications"]["toast_min_severity"] not in SEVERITIES + ["none"]:
+        raise ValueError("toast_min_severity must be info, warning, critical or none")
+    rules = []
+    for r in s["alerts"]["rules"]:
+        if r.get("type") not in RULE_TYPES:
+            raise ValueError(f"unknown alert type {r.get('type')}")
+        if r.get("severity") not in SEVERITIES:
+            raise ValueError(f"bad severity {r.get('severity')}")
+        rr = {"id": str(r.get("id") or f"r-{len(rules)}")[:40], "name": str(r.get("name") or RULE_TYPES[r["type"]])[:80],
+              "type": r["type"], "severity": r["severity"], "for_s": max(0, min(3600, float(r.get("for_s") or 0))),
+              "enabled": bool(r.get("enabled", True)), "lab": str(r.get("lab") or "")[:31], "node": str(r.get("node") or "")[:31]}
+        if r["type"] in ("cpu_high", "mem_high", "link_util", "errors_rising", "drops_rising", "probe_loss", "probe_rtt"):
+            rr["threshold"] = max(0, float(r.get("threshold") or 0))
+        if r["type"] in ("probe_loss", "probe_rtt"):
+            if not r.get("lab") or not r.get("node") or not r.get("target"):
+                raise ValueError("ping probes need a lab, a source device and a target")
+            rr["target"] = str(r["target"])[:253]
+        rules.append(rr)
+    if len({r["id"] for r in rules}) != len(rules):
+        raise ValueError("duplicate rule ids")
+    s["alerts"]["rules"] = rules
+    return s
+
+
+def save(new: dict, keep_secret=True) -> dict:
+    global _cache
+    cur = load()
+    s = validate(new)
+    if keep_secret:   # the password hash is only changed through the auth endpoints
+        s["security"]["password_hash"] = cur["security"]["password_hash"]
+        if not s["security"]["password_hash"]:
+            s["security"]["auth_enabled"] = False
+    with _LOCK:
+        FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(s, indent=2))
+        os.replace(tmp, FILE)
+        _cache = s
+    return public(s)
+
+
+def public(s: dict | None = None) -> dict:
+    s = copy.deepcopy(s or load())
+    s["security"]["password_set"] = bool(s["security"].pop("password_hash", ""))
+    return s

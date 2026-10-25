@@ -1,0 +1,29 @@
+# netlab on FLT-NETLAB-01.   Update:  docker compose pull && docker compose up -d
+#
+# Why it looks like this: netlab drives the HOST's Docker (lab devices are sibling
+# containers), creates veths and tc qdiscs in their namespaces, and captures packets.
+# So it needs host networking, the host PID namespace, the Docker socket and privileges.
+# /opt/netlab is mounted at the SAME path because containerlab bind paths are resolved
+# by the host daemon. Labs keep running while this container restarts or updates.
+services:
+  netlab:
+    image: ${NETLAB_IMAGE:?set NETLAB_IMAGE in .env, e.g. ghcr.io/<github-user>/netlab:latest}
+    container_name: netlab
+    restart: unless-stopped
+    privileged: true
+    network_mode: host
+    pid: host
+    cgroup: host
+    environment:
+      NETLAB_DATA: /opt/netlab/labs
+      NETLAB_PORT: ${NETLAB_PORT:-8080}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /opt/netlab:/opt/netlab                # labs, snapshots, settings, metrics history
+      - /home:/home                            # so .clab.yml imports from home folders keep their paths
+      - /var/run/netns:/var/run/netns
+      - /var/lib/docker/containers:/var/lib/docker/containers
+      - /lib/modules:/lib/modules:ro
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }

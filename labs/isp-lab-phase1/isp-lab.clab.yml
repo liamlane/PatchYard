@@ -1,0 +1,108 @@
+# Phase 1: INET + ISP-1 (core, Town A PE) + one eBGP customer
+name: isp-lab
+
+mgmt:
+  network: clab-mgmt
+  ipv4-subnet: 172.31.255.0/24   # avoids containerlab's 172.20.20.0/24 default
+
+topology:
+  kinds:
+    linux:
+      image: quay.io/frrouting/frr:10.0.0
+
+  nodes:
+    # ---------- routers (FRR) ----------
+    inet-r1:
+      kind: linux
+      binds:
+        - configs/inet-r1/frr.conf:/etc/frr/frr.conf
+        - configs/common/daemons:/etc/frr/daemons
+        - configs/common/vtysh.conf:/etc/frr/vtysh.conf
+      exec:
+        - ip route del default
+        - sysctl -w net.ipv4.ip_forward=1
+    isp1-core:
+      kind: linux
+      binds:
+        - configs/isp1-core/frr.conf:/etc/frr/frr.conf
+        - configs/common/daemons:/etc/frr/daemons
+        - configs/common/vtysh.conf:/etc/frr/vtysh.conf
+      exec:
+        - ip route del default
+        - sysctl -w net.ipv4.ip_forward=1
+    isp1-pe-a:
+      kind: linux
+      binds:
+        - configs/isp1-pe-a/frr.conf:/etc/frr/frr.conf
+        - configs/common/daemons:/etc/frr/daemons
+        - configs/common/vtysh.conf:/etc/frr/vtysh.conf
+      exec:
+        - ip route del default
+        - sysctl -w net.ipv4.ip_forward=1
+    c1a-r1:
+      kind: linux
+      binds:
+        - configs/c1a-r1/frr.conf:/etc/frr/frr.conf
+        - configs/common/daemons:/etc/frr/daemons
+        - configs/common/vtysh.conf:/etc/frr/vtysh.conf
+      exec:
+        - ip route del default
+        - sysctl -w net.ipv4.ip_forward=1
+
+    # ---------- INET public services segment 1.1.1.0/28 ----------
+    br-inet:
+      kind: bridge
+
+    dns1:
+      kind: linux
+      image: alpine:3.20
+      cmd: tail -f /dev/null
+      binds:
+        - configs/dns/dnsmasq.conf:/etc/dnsmasq.conf
+      exec:
+        - apk add --no-cache dnsmasq iproute2
+        - ip addr add 1.1.1.1/28 dev eth1
+        - ip route replace default via 1.1.1.14 dev eth1
+        - dnsmasq
+    dns2:
+      kind: linux
+      image: alpine:3.20
+      cmd: tail -f /dev/null
+      binds:
+        - configs/dns/dnsmasq.conf:/etc/dnsmasq.conf
+      exec:
+        - apk add --no-cache dnsmasq iproute2
+        - ip addr add 1.1.1.2/28 dev eth1
+        - ip route replace default via 1.1.1.14 dev eth1
+        - dnsmasq
+    web1:
+      kind: linux
+      image: ghcr.io/hellt/network-multitool
+      binds:
+        - configs/common/webhost.sh:/usr/local/bin/netlab-web:ro
+      exec:
+        - ip addr add 1.1.1.3/28 dev eth1
+        - ip route replace default via 1.1.1.14 dev eth1
+        - sh /usr/local/bin/netlab-web
+
+    # ---------- customer C1A public LAN 81.10.100.0/29 ----------
+    c1a-web:
+      kind: linux
+      image: ghcr.io/hellt/network-multitool
+      binds:
+        - configs/common/webhost.sh:/usr/local/bin/netlab-web:ro
+      exec:
+        - ip addr add 81.10.100.2/29 dev eth1
+        - ip route replace default via 81.10.100.1 dev eth1
+        - sh -c "echo nameserver 1.1.1.1 > /etc/resolv.conf"
+        - sh /usr/local/bin/netlab-web
+
+  links:
+    - endpoints: ["inet-r1:eth1", "isp1-core:eth1"]
+    - endpoints: ["isp1-core:eth2", "isp1-pe-a:eth1"]
+    - endpoints: ["isp1-pe-a:eth2", "c1a-r1:eth1"]
+    - endpoints: ["c1a-r1:eth2", "c1a-web:eth1"]
+    - endpoints: ["inet-r1:eth2", "br-inet:bi-inet-r1"]
+    - endpoints: ["dns1:eth1", "br-inet:bi-dns1"]
+    - endpoints: ["dns2:eth1", "br-inet:bi-dns2"]
+    - endpoints: ["web1:eth1", "br-inet:bi-web1"]
