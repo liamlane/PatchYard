@@ -16,7 +16,8 @@ echo "== docker"
 command -v docker >/dev/null || curl -fsSL https://get.docker.com | sudo sh
 sudo docker compose version >/dev/null
 
-if systemctl list-unit-files 2>/dev/null | grep -q '^netlab.service'; then
+# (not "systemctl list-unit-files | grep -q": with pipefail, grep -q's early exit SIGPIPEs systemctl and the test is false)
+if systemctl cat netlab.service >/dev/null 2>&1; then
   echo "== stopping the old systemd netlab (data is kept)"
   sudo systemctl disable --now netlab || true
 fi

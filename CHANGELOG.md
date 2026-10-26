@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+- Docs: README rewritten with screenshots and diagrams; `docs/architecture.md` (how netlab works); diagrams in `docs/images/` (light/dark aware SVG).
+- `setup.sh` now detects the old `netlab.service` reliably (the `grep -q` check failed under `pipefail`).
+
 ## 0.9.0
 - **Alerting**: rules engine (device stopped, link down, BGP/OSPF/LDP, CPU, memory, throughput, errors/drops, ping probes), server-side evaluation, grace period after deploy, "for" duration, auto-resolve; bell badge, notifications panel with acknowledge and history, toasts by severity, optional sound; devices with firing alerts are marked on the canvas.
 - **Settings**: global, server-side (`/opt/netlab/settings.json`): live editing, auto-snapshot before deploy, lab default images/management network/MTU, monitoring interval/retention/check interval, alert rules editor, notification preferences, appearance, security, about/update.

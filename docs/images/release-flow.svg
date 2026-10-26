@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1114 250" width="1114" height="250" role="img" aria-label="netlab release and update flow"><title>netlab release and update flow</title>
+<style>
+  .bg{fill:#ffffff} .grp{fill:#f5f7fa;stroke:#c9d2dc} .grp2{fill:#eef3f9;stroke:#9fb3c8}
+  .box{fill:#ffffff;stroke:#b8c4d0} .acc{fill:#e8f1fd;stroke:#3b82f6} .grn{fill:#e9f7ef;stroke:#22a35a}
+  .org{fill:#fff3e6;stroke:#e8891a} .pur{fill:#f3eefc;stroke:#8b5cf6}
+  .t{fill:#1b2733;font:600 14px system-ui,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif}
+  .h{fill:#1b2733;font:700 15px system-ui,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif}
+  .g{fill:#55657a;font:600 12px system-ui,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif;letter-spacing:.04em}
+  .s{fill:#4a5a6c;font:12.5px system-ui,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif}
+  .m{fill:#4a5a6c;font:12px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  .l{fill:#33475b;font:600 12px system-ui,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif}
+  .lb{fill:#ffffff}
+  .ln{stroke:#5b6b7d;stroke-width:1.6;fill:none} .lnd{stroke:#5b6b7d;stroke-width:1.6;fill:none;stroke-dasharray:6 5}
+  .ah{fill:#5b6b7d}
+  @media (prefers-color-scheme: dark){
+    .bg{fill:#0d1117} .grp{fill:#151b23;stroke:#30363d} .grp2{fill:#111a26;stroke:#2f4a6b}
+    .box{fill:#0d1117;stroke:#3d444d} .acc{fill:#0f2440;stroke:#4c8ff0} .grn{fill:#0f2a1c;stroke:#34b36a}
+    .org{fill:#2e1f0c;stroke:#e8913a} .pur{fill:#221838;stroke:#9b7bf0}
+    .t,.h{fill:#e6edf3} .g{fill:#8b98a8} .s,.m{fill:#a5b1be} .l{fill:#c9d4df} .lb{fill:#0d1117}
+    .ln,.lnd{stroke:#8b98a8} .ah{fill:#8b98a8}
+  }
+</style><defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker></defs><rect width="1114" height="250" class="bg"/><text x="36" y="34" class="g" text-anchor="start">RELEASE AND UPDATE FLOW</text>
+<rect x="36" y="50" width="194" height="116" rx="10" class="acc" stroke-width="1.4"/>
+<text x="50" y="74" class="t" text-anchor="start">Windows laptop</text>
+<text x="50" y="94" class="s" text-anchor="start">GitHub Desktop:</text>
+<text x="50" y="112" class="s" text-anchor="start">commit to main, push.</text>
+<text x="50" y="130" class="s" text-anchor="start">Tag vX.Y.Z to release</text>
+<rect x="248" y="50" width="194" height="116" rx="10" class="box" stroke-width="1.4"/>
+<text x="262" y="74" class="t" text-anchor="start">GitHub repo</text>
+<text x="262" y="94" class="s" text-anchor="start">liamlane/netlab</text>
+<text x="262" y="112" class="s" text-anchor="start">(private)</text>
+<text x="262" y="130" class="s" text-anchor="start">.gitattributes forces LF</text>
+<rect x="460" y="50" width="194" height="116" rx="10" class="pur" stroke-width="1.4"/>
+<text x="474" y="74" class="t" text-anchor="start">GitHub Actions</text>
+<text x="474" y="94" class="s" text-anchor="start">pytest · UI build</text>
+<text x="474" y="112" class="s" text-anchor="start">docker build</text>
+<text x="474" y="130" class="s" text-anchor="start">push to GHCR</text>
+<rect x="672" y="50" width="194" height="116" rx="10" class="org" stroke-width="1.4"/>
+<text x="686" y="74" class="t" text-anchor="start">GHCR</text>
+<text x="686" y="94" class="s" text-anchor="start">ghcr.io/liamlane/netlab</text>
+<text x="686" y="112" class="s" text-anchor="start">latest · X.Y.Z · sha-…</text>
+<text x="686" y="130" class="s" text-anchor="start">(private package)</text>
+<rect x="884" y="50" width="194" height="116" rx="10" class="grn" stroke-width="1.4"/>
+<text x="898" y="74" class="t" text-anchor="start">FLT-NETLAB-01</text>
+<text x="898" y="94" class="s" text-anchor="start">git pull (deploy/, labs/)</text>
+<text x="898" y="112" class="s" text-anchor="start">./deploy/update.sh</text>
+<text x="898" y="130" class="s" text-anchor="start">compose pull + up -d</text>
+<path d="M230,108 L248,108" class="ln" marker-end="url(#a)"/>
+<path d="M442,108 L460,108" class="ln" marker-end="url(#a)"/>
+<path d="M654,108 L672,108" class="ln" marker-end="url(#a)"/>
+<path d="M866,108 L884,108" class="ln" marker-end="url(#a)"/>
+<text x="36" y="200" class="s" text-anchor="start">Only the netlab container restarts on update. Running labs, configs, snapshots, settings and metrics</text>
+<text x="36" y="220" class="s" text-anchor="start">live on the host in /opt/netlab and are untouched. Pin a version with NETLAB_IMAGE in /opt/netlab/deploy/.env.</text></svg>

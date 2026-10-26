@@ -1,0 +1,109 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 720" width="1100" height="720" role="img" aria-label="netlab architecture"><title>netlab architecture</title>
+<style>
+  .bg{fill:#ffffff} .grp{fill:#f5f7fa;stroke:#c9d2dc} .grp2{fill:#eef3f9;stroke:#9fb3c8}
+  .box{fill:#ffffff;stroke:#b8c4d0} .acc{fill:#e8f1fd;stroke:#3b82f6} .grn{fill:#e9f7ef;stroke:#22a35a}
+  .org{fill:#fff3e6;stroke:#e8891a} .pur{fill:#f3eefc;stroke:#8b5cf6}
+  .t{fill:#1b2733;font:600 14px system-ui,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif}
+  .h{fill:#1b2733;font:700 15px system-ui,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif}
+  .g{fill:#55657a;font:600 12px system-ui,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif;letter-spacing:.04em}
+  .s{fill:#4a5a6c;font:12.5px system-ui,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif}
+  .m{fill:#4a5a6c;font:12px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  .l{fill:#33475b;font:600 12px system-ui,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif}
+  .lb{fill:#ffffff}
+  .ln{stroke:#5b6b7d;stroke-width:1.6;fill:none} .lnd{stroke:#5b6b7d;stroke-width:1.6;fill:none;stroke-dasharray:6 5}
+  .ah{fill:#5b6b7d}
+  @media (prefers-color-scheme: dark){
+    .bg{fill:#0d1117} .grp{fill:#151b23;stroke:#30363d} .grp2{fill:#111a26;stroke:#2f4a6b}
+    .box{fill:#0d1117;stroke:#3d444d} .acc{fill:#0f2440;stroke:#4c8ff0} .grn{fill:#0f2a1c;stroke:#34b36a}
+    .org{fill:#2e1f0c;stroke:#e8913a} .pur{fill:#221838;stroke:#9b7bf0}
+    .t,.h{fill:#e6edf3} .g{fill:#8b98a8} .s,.m{fill:#a5b1be} .l{fill:#c9d4df} .lb{fill:#0d1117}
+    .ln,.lnd{stroke:#8b98a8} .ah{fill:#8b98a8}
+  }
+</style><defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker></defs><rect width="1100" height="720" class="bg"/><rect x="20" y="60" width="230" height="120" rx="10" class="acc" stroke-width="1.4"/>
+<text x="34" y="84" class="t" text-anchor="start">Browser</text>
+<text x="34" y="104" class="s" text-anchor="start">React + React Flow canvas</text>
+<text x="34" y="122" class="s" text-anchor="start">xterm.js device consoles</text>
+<text x="34" y="140" class="s" text-anchor="start">charts · alerts · settings</text>
+<rect x="20" y="300" width="230" height="110" rx="10" class="pur" stroke-width="1.4"/>
+<text x="34" y="324" class="t" text-anchor="start">GitHub Actions</text>
+<text x="34" y="344" class="s" text-anchor="start">pytest + UI build</text>
+<text x="34" y="362" class="s" text-anchor="start">docker build → GHCR</text>
+<text x="34" y="380" class="s" text-anchor="start">on every push to main</text>
+<rect x="300" y="20" width="780" height="680" rx="14" class="grp" stroke-width="1.4"/>
+<text x="316" y="44" class="g" text-anchor="start">FLT-NETLAB-01 · UBUNTU 24.04 VM ON PROXMOX (PV2)</text>
+<rect x="320" y="56" width="740" height="274" rx="14" class="grp2" stroke-width="1.4"/>
+<text x="336" y="80" class="g" text-anchor="start">netlab container  ·  ghcr.io/&lt;user&gt;/netlab</text>
+<text x="336" y="104" class="s" text-anchor="start">FastAPI + uvicorn: REST API, WebSockets and the built UI on :8080. Privileged, host network / PID / cgroup.</text>
+<rect x="336" y="120" width="168" height="62" rx="10" class="box" stroke-width="1.4"/>
+<text x="350" y="144" class="t" text-anchor="start">Labs</text>
+<text x="350" y="164" class="s" text-anchor="start">topology → containerlab</text>
+<rect x="516" y="120" width="168" height="62" rx="10" class="box" stroke-width="1.4"/>
+<text x="530" y="144" class="t" text-anchor="start">Live edit</text>
+<text x="530" y="164" class="s" text-anchor="start">veth hot-plug</text>
+<rect x="696" y="120" width="168" height="62" rx="10" class="box" stroke-width="1.4"/>
+<text x="710" y="144" class="t" text-anchor="start">Consoles</text>
+<text x="710" y="164" class="s" text-anchor="start">vtysh / sh over WS</text>
+<rect x="876" y="120" width="168" height="62" rx="10" class="box" stroke-width="1.4"/>
+<text x="890" y="144" class="t" text-anchor="start">Snapshots</text>
+<text x="890" y="164" class="s" text-anchor="start">diff · restore · zip</text>
+<rect x="336" y="194" width="168" height="62" rx="10" class="box" stroke-width="1.4"/>
+<text x="350" y="218" class="t" text-anchor="start">Metrics</text>
+<text x="350" y="238" class="s" text-anchor="start">sampler, every 10 s</text>
+<rect x="516" y="194" width="168" height="62" rx="10" class="box" stroke-width="1.4"/>
+<text x="530" y="218" class="t" text-anchor="start">Alerts</text>
+<text x="530" y="238" class="s" text-anchor="start">rules · probes · 30 s</text>
+<rect x="696" y="194" width="168" height="62" rx="10" class="box" stroke-width="1.4"/>
+<text x="710" y="218" class="t" text-anchor="start">Faults</text>
+<text x="710" y="238" class="s" text-anchor="start">tc netem per link</text>
+<rect x="876" y="194" width="168" height="62" rx="10" class="box" stroke-width="1.4"/>
+<text x="890" y="218" class="t" text-anchor="start">Traffic</text>
+<text x="890" y="238" class="s" text-anchor="start">iperf3 jobs</text>
+<text x="336" y="300" class="m" text-anchor="start">bundled: containerlab 0.82 · Docker CLI 27.5 · iproute2 · nsenter · tcpdump · iperf3</text>
+<rect x="320" y="366" width="290" height="76" rx="10" class="box" stroke-width="1.4"/>
+<text x="334" y="390" class="t" text-anchor="start">Docker Engine</text>
+<text x="334" y="410" class="s" text-anchor="start">runs every lab device as a container</text>
+<rect x="640" y="366" width="320" height="76" rx="10" class="org" stroke-width="1.4"/>
+<text x="654" y="390" class="t" text-anchor="start">/opt/netlab  (host volume)</text>
+<text x="654" y="410" class="s" text-anchor="start">labs/&lt;lab&gt;/  settings.json  metrics.db</text>
+<text x="654" y="428" class="s" text-anchor="start">lab.json · configs/ · snapshots/</text>
+<rect x="320" y="480" width="740" height="180" rx="14" class="grp" stroke-width="1.4"/>
+<text x="336" y="504" class="g" text-anchor="start">LAB CONTAINERS · ONE PER DEVICE</text>
+<rect x="336" y="516" width="168" height="104" rx="10" class="grn" stroke-width="1.4"/>
+<text x="350" y="540" class="t" text-anchor="start">Router</text>
+<text x="350" y="560" class="s" text-anchor="start">FRR 10.0.0</text>
+<text x="350" y="578" class="s" text-anchor="start">OSPF · BGP · MPLS/LDP</text>
+<text x="350" y="596" class="s" text-anchor="start">VRFs · static routes</text>
+<rect x="516" y="516" width="168" height="104" rx="10" class="acc" stroke-width="1.4"/>
+<text x="530" y="540" class="t" text-anchor="start">Switch</text>
+<text x="530" y="560" class="s" text-anchor="start">Alpine + Linux bridge</text>
+<text x="530" y="578" class="s" text-anchor="start">802.1Q VLANs · STP</text>
+<text x="530" y="596" class="s" text-anchor="start">management SVI</text>
+<rect x="696" y="516" width="168" height="104" rx="10" class="box" stroke-width="1.4"/>
+<text x="710" y="540" class="t" text-anchor="start">PC</text>
+<text x="710" y="560" class="s" text-anchor="start">network-multitool</text>
+<text x="710" y="578" class="s" text-anchor="start">IP config · ping</text>
+<text x="710" y="596" class="s" text-anchor="start">curl · traceroute</text>
+<rect x="876" y="516" width="168" height="104" rx="10" class="pur" stroke-width="1.4"/>
+<text x="890" y="540" class="t" text-anchor="start">Server</text>
+<text x="890" y="560" class="s" text-anchor="start">Alpine: dnsmasq, nginx</text>
+<text x="890" y="578" class="s" text-anchor="start">DNS · DHCP · HTTP</text>
+<text x="890" y="596" class="s" text-anchor="start">per-server records</text>
+<text x="336" y="645" class="s" text-anchor="start">veth pairs are the cables · management network clab-mgmt 172.31.255.0/24</text>
+<text x="320" y="688" class="m" text-anchor="start">kernel modules: mpls_router · mpls_iptunnel · vrf · 8021q · bridge · sch_netem</text>
+<path d="M250,120 L320,120" class="ln" marker-end="url(#a)" marker-start="url(#a)"/>
+<text x="285" y="110" class="l" text-anchor="middle">HTTP·WS</text>
+<path d="M250,355 L285,355 L285,300 L320,300" class="lnd" marker-end="url(#a)"/>
+<text x="20" y="434" class="s" text-anchor="start">The VM pulls the image with</text>
+<text x="20" y="452" class="s" text-anchor="start">docker compose (deploy/update.sh).</text>
+<path d="M465,330 L465,366" class="ln" marker-end="url(#a)"/>
+<rect x="472" y="340" width="84.6" height="18" rx="4" class="lb"/>
+<text x="478" y="353" class="l" text-anchor="start">docker.sock</text>
+<path d="M465,442 L465,480" class="ln" marker-end="url(#a)"/>
+<rect x="472" y="453" width="150.6" height="18" rx="4" class="lb"/>
+<text x="478" y="466" class="l" text-anchor="start">create · start · exec</text>
+<path d="M800,330 L800,366" class="ln" marker-end="url(#a)" marker-start="url(#a)"/>
+<rect x="807" y="340" width="91.19999999999999" height="18" rx="4" class="lb"/>
+<text x="813" y="353" class="l" text-anchor="start">read / write</text>
+<path d="M1010,330 L1010,480" class="lnd" marker-end="url(#a)"/>
+<rect x="980.9" y="397" width="58.199999999999996" height="18" rx="4" class="lb"/>
+<text x="1010" y="410" class="l" text-anchor="middle">nsenter</text></svg>

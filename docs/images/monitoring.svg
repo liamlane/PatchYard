@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 400" width="1120" height="400" role="img" aria-label="netlab monitoring and alerting pipeline"><title>netlab monitoring and alerting pipeline</title>
+<style>
+  .bg{fill:#ffffff} .grp{fill:#f5f7fa;stroke:#c9d2dc} .grp2{fill:#eef3f9;stroke:#9fb3c8}
+  .box{fill:#ffffff;stroke:#b8c4d0} .acc{fill:#e8f1fd;stroke:#3b82f6} .grn{fill:#e9f7ef;stroke:#22a35a}
+  .org{fill:#fff3e6;stroke:#e8891a} .pur{fill:#f3eefc;stroke:#8b5cf6}
+  .t{fill:#1b2733;font:600 14px system-ui,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif}
+  .h{fill:#1b2733;font:700 15px system-ui,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif}
+  .g{fill:#55657a;font:600 12px system-ui,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif;letter-spacing:.04em}
+  .s{fill:#4a5a6c;font:12.5px system-ui,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif}
+  .m{fill:#4a5a6c;font:12px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  .l{fill:#33475b;font:600 12px system-ui,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif}
+  .lb{fill:#ffffff}
+  .ln{stroke:#5b6b7d;stroke-width:1.6;fill:none} .lnd{stroke:#5b6b7d;stroke-width:1.6;fill:none;stroke-dasharray:6 5}
+  .ah{fill:#5b6b7d}
+  @media (prefers-color-scheme: dark){
+    .bg{fill:#0d1117} .grp{fill:#151b23;stroke:#30363d} .grp2{fill:#111a26;stroke:#2f4a6b}
+    .box{fill:#0d1117;stroke:#3d444d} .acc{fill:#0f2440;stroke:#4c8ff0} .grn{fill:#0f2a1c;stroke:#34b36a}
+    .org{fill:#2e1f0c;stroke:#e8913a} .pur{fill:#221838;stroke:#9b7bf0}
+    .t,.h{fill:#e6edf3} .g{fill:#8b98a8} .s,.m{fill:#a5b1be} .l{fill:#c9d4df} .lb{fill:#0d1117}
+    .ln,.lnd{stroke:#8b98a8} .ah{fill:#8b98a8}
+  }
+</style><defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker></defs><rect width="1120" height="400" class="bg"/><text x="20" y="30" class="g" text-anchor="start">MONITORING AND ALERTING</text>
+<rect x="20" y="46" width="300" height="56" rx="10" class="box" stroke-width="1.4"/>
+<text x="34" y="69" class="m" text-anchor="start">/proc/&lt;pid&gt;/net/dev</text>
+<text x="34" y="88" class="s" text-anchor="start">bytes · packets · drops · errors</text>
+<rect x="20" y="114" width="300" height="56" rx="10" class="box" stroke-width="1.4"/>
+<text x="34" y="137" class="m" text-anchor="start">/sys/class/net/&lt;if&gt;/operstate</text>
+<text x="34" y="156" class="s" text-anchor="start">port up / down</text>
+<rect x="20" y="182" width="300" height="56" rx="10" class="box" stroke-width="1.4"/>
+<text x="34" y="205" class="m" text-anchor="start">cgroup cpu.stat · memory</text>
+<text x="34" y="224" class="s" text-anchor="start">CPU % · memory per device</text>
+<rect x="20" y="250" width="300" height="56" rx="10" class="box" stroke-width="1.4"/>
+<text x="34" y="273" class="m" text-anchor="start">vtysh … json</text>
+<text x="34" y="292" class="s" text-anchor="start">BGP · OSPF · LDP neighbour state</text>
+<rect x="20" y="318" width="300" height="56" rx="10" class="box" stroke-width="1.4"/>
+<text x="34" y="341" class="m" text-anchor="start">ping inside the device netns</text>
+<text x="34" y="360" class="s" text-anchor="start">probe loss · RTT (IP SLA-style)</text>
+<rect x="390" y="74" width="220" height="96" rx="10" class="box" stroke-width="1.4"/>
+<text x="404" y="98" class="t" text-anchor="start">Metrics collector</text>
+<text x="404" y="118" class="s" text-anchor="start">samples every 10 s</text>
+<text x="404" y="136" class="s" text-anchor="start">(Settings → Monitoring)</text>
+<rect x="390" y="264" width="220" height="96" rx="10" class="box" stroke-width="1.4"/>
+<text x="404" y="288" class="t" text-anchor="start">Health loop</text>
+<text x="404" y="308" class="s" text-anchor="start">protocol polls + probes</text>
+<text x="404" y="326" class="s" text-anchor="start">every 30 s</text>
+<path d="M320,74 L350,74 L350,122 L390,122" class="ln" marker-end="url(#a)"/>
+<path d="M320,142 L350,142 L350,122 L390,122" class="ln" marker-end="url(#a)"/>
+<path d="M320,210 L350,210 L350,122 L390,122" class="ln" marker-end="url(#a)"/>
+<path d="M320,278 L350,278 L350,312 L390,312" class="ln" marker-end="url(#a)"/>
+<path d="M320,346 L350,346 L350,312 L390,312" class="ln" marker-end="url(#a)"/>
+<rect x="680" y="60" width="210" height="76" rx="10" class="org" stroke-width="1.4"/>
+<text x="694" y="84" class="t" text-anchor="start">metrics.db</text>
+<text x="694" y="104" class="s" text-anchor="start">SQLite, kept 48 h</text>
+<rect x="680" y="214" width="210" height="146" rx="10" class="acc" stroke-width="1.4"/>
+<text x="694" y="238" class="t" text-anchor="start">Alert engine</text>
+<text x="694" y="258" class="s" text-anchor="start">rules by type, lab, device</text>
+<text x="694" y="276" class="s" text-anchor="start">'for' hold time</text>
+<text x="694" y="294" class="s" text-anchor="start">grace period after deploy</text>
+<text x="694" y="312" class="s" text-anchor="start">auto-resolve when clear</text>
+<text x="694" y="330" class="s" text-anchor="start">acknowledge</text>
+<path d="M610,100 L680,100" class="ln" marker-end="url(#a)"/>
+<path d="M610,140 L645,140 L645,250 L680,250" class="ln" marker-end="url(#a)"/>
+<rect x="602.7" y="183" width="84.6" height="18" rx="4" class="lb"/>
+<text x="645" y="196" class="l" text-anchor="middle">each sample</text>
+<path d="M610,312 L680,312" class="ln" marker-end="url(#a)"/>
+<rect x="950" y="60" width="160" height="76" rx="10" class="grn" stroke-width="1.4"/>
+<text x="964" y="84" class="t" text-anchor="start">Charts</text>
+<text x="964" y="104" class="s" text-anchor="start">dashboard · history</text>
+<text x="964" y="122" class="s" text-anchor="start">traffic overlay</text>
+<rect x="950" y="214" width="160" height="146" rx="10" class="grn" stroke-width="1.4"/>
+<text x="964" y="238" class="t" text-anchor="start">Notifications</text>
+<text x="964" y="258" class="s" text-anchor="start">bell badge</text>
+<text x="964" y="276" class="s" text-anchor="start">toasts by severity</text>
+<text x="964" y="294" class="s" text-anchor="start">device badges</text>
+<text x="964" y="312" class="s" text-anchor="start">history panel</text>
+<path d="M890,98 L950,98" class="ln" marker-end="url(#a)"/>
+<path d="M890,287 L950,287" class="ln" marker-end="url(#a)"/></svg>
