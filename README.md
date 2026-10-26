@@ -4,6 +4,10 @@ Self-hosted, Packet Tracer-style network lab for real protocol work. Every devic
 
 Personal tool. Runs on FLT-NETLAB-01 (Ubuntu 24.04 VM on PV2).
 
+## Workflow
+
+Edit/commit from the Windows laptop with GitHub Desktop → push → GitHub Actions tests, builds and publishes the image → on the VM run `./deploy/update.sh` (or `git pull` first when `deploy/` files changed). Line endings are forced to LF by `.gitattributes`, so commits from Windows are safe.
+
 ## Run it (container)
 
 One-time setup on the VM, from a clone of this repo:
