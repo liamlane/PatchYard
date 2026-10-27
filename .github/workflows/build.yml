@@ -36,6 +36,8 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - id: ver
+        run: echo "v=$(cat VERSION)" >> "$GITHUB_OUTPUT"
       - id: meta
         uses: docker/metadata-action@v5
         with:
@@ -52,7 +54,7 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            NETLAB_VERSION=${{ github.ref_type == 'tag' && github.ref_name || format('main-{0}', github.run_number) }}
+            NETLAB_VERSION=${{ github.ref_type == 'tag' && github.ref_name || format('{0}+main.{1}', steps.ver.outputs.v, github.run_number) }}
             NETLAB_COMMIT=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

@@ -1,5 +1,19 @@
 # NetLab build log
 
+## 2026-10-27: 0.10.0 additions after review
+- Reported: DHCP on a PC gave `mv: can't rename '/etc/resolv.conf.118': resource busy`. Cause: busybox udhcpc's default hook writes a temp file and mv's it over /etc/resolv.conf, which Docker bind-mounts. Fix: `labs.DHCP_SCRIPT` hook (sets address/gateway, writes resolv.conf in place), bind-mounted at /usr/local/bin/netlab-dhcp for PCs/servers and installed to /tmp for labs deployed before. Tested against busybox udhcpc + dnsmasq in network namespaces with a bind-mounted resolv.conf.
+- Added: reachability matrix (`reach.py`, Dashboard), IOS pipe filters, `show run` gated behind enable, Windows-style ipconfig/arp in the PC prompt, rename carries configs/<node>.
+- Fixed: power flag cleared on destroy; port picker closes on Escape. Lint passes (eslint no-undef/hooks, pyflakes) with only unused-import warnings left.
+
+## 2026-10-27: 0.10.0, hardware models, modules, power, IOS-syntax CLI
+- `hardware.py`: chassis catalogue (3 routers, 5 switches), 8 modules, port types with media and speed, stable ethN mapping (slot k port p = eth{100(k+1)+p+1}), IOS name parse/resolve, validation on save (cable on a missing port is refused).
+- Link speed as netem rate at the slower end, merged with impairments; re-applied after deploy and live wiring.
+- Power off/on (`live.power`): remove container, start from lab file, re-plug cables, restore impairments/admin-down. Power state in props, cleared on deploy, ignored by the device-stopped alert.
+- `ios.py`: line editor, grammar matcher with IOS abbreviations, ?/Tab, modes, router translation to FRR (interfaces, subifs with dot1Q, loopbacks via dummy, OSPF wildcards, BGP AFs incl. vrf/vpnv4, static routes, LDP), switch commands on props, show commands, ping/traceroute via nsenter with IOS output, reload = power cycle, enable secret, banner, stored accept-only lines.
+- Props revision sync (status `rev`/`rev_nodes`, `_rev` on save) so server-side edits survive a stale autosave.
+- UI: rear-panel Physical tab with drag-in modules and power, port picker on cabling, serial cable, port names everywhere, CLI mode switch (IOS/FRR/Shell), Settings (module power rule, CLI default, default models), Labs tab with delete.
+- Tests: 34 passing (hardware mapping/resolve/validation/speed, mask maths, grammar, FRR→IOS config rendering, rev merge, save validation, router exec). IOS CLI driven end-to-end against a local FRR 8.4 (router) and a namespace bridge (switch show commands); websocket route tested. Not tested against FRR 10 in containers, live power cycle, netem speed caps, or switch VLAN filtering (sandbox kernel lacks vlan_filtering/8021q).
+
 ## 2026-10-26 — 0.9.0: alerting, settings, live edit, traffic, login, container + repo
 - Rev 7 confirmed working on the VM except the 1-hour history check (deferred, on the roadmap).
 - Decisions: in-app notifications only for now (external channels on the roadmap); live add happens immediately; global Settings; GitHub repo with a published container image so updates are `docker compose pull && up -d`.
@@ -28,7 +42,6 @@ FLT-NETLAB-01: VM 120 on PV2 (`local` qcow2 40 GB), 4 vCPU host, 6144/4096 MB, v
 
 ## Watch list
 - Web-app import of isp-lab-p2 uses lab name isp-lab → destroy the CLI lab first; import a copy.
-- Device rename doesn't carry its config folder.
 - Switch STP is 802.1D only (30 s).
 - Clones of labs with host bridges share the bridge.
 - Live-added devices: images not already on the VM are pulled on first add (slow the first time).

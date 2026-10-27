@@ -65,6 +65,40 @@ When live editing is on (Settings → General), changes to a running lab apply i
 
 Router config directories are bind-mounted (`configs/<node>:/etc/frr`). FRR's `write memory` writes a temporary file and renames it, which a single-file bind mount would refuse. **Save running configs** (Ctrl+S) runs `write memory` on every router. It reports which devices saved, failed or were skipped.
 
+## Hardware: models, modules, ports
+
+A router or switch can have a chassis model (`props.chassis`) with on-board ports and module slots (`props.modules`). Ports are named the IOS way, but Linux interface names can't contain `/`, so each port has a fixed Linux name:
+
+| Port | Linux name |
+| --- | --- |
+| on-board ports, in order | `eth1`, `eth2`, … |
+| slot *k* (0-based), port *p* | `eth{100·(k+1)+p+1}`, e.g. slot 0/1 port 0 = `eth101` |
+
+The numbering never moves when a module is added, so cables and FRR config stay put. `hardware.py` holds the catalogue and the mapping, and `hw.js` mirrors it for the UI. Devices without a model ("generic", every lab from before 0.10) keep free-form `eth1`, `eth2` … ports.
+
+- **Media**: each port type takes one cable type: copper, fibre (SFP/SFP+) or serial. The port picker only offers ports that match the cable, and the server refuses a cable on a port the hardware doesn't have.
+- **Speed**: links run at the slower end's speed, applied as `netem rate` on both ends (Fa 100 Mb/s, Gi 1 Gb/s, serial 1.544 Mb/s; 10G is left uncapped). An impairment's rate is used instead when it's lower. Serial is emulated: an Ethernet veth at T1 speed, not HDLC/PPP.
+- **Power**: power off removes the device's container (unsaved running config is lost). Power on starts it from the lab file, re-plugs every cable whose other end is up, and re-applies link speed, impairments and admin-down state. With "Power off to swap modules" on (default), modules can only change while the device is off or the lab isn't deployed. A port only exists in Linux once it's cabled, which is why modules can be added to a running device with the rule turned off.
+
+## IOS-syntax CLI
+
+The CLI tab opens an IOS-style session (`ios.py`) over the console WebSocket. It has its own line editor (history, `?` help, Tab completion, Ctrl+Z/Ctrl+C) and a grammar per mode (user, privileged, config, interface, router, address-family, line, VLAN). Commands can be abbreviated as long as they're unambiguous.
+
+- **Routers**: each command is translated and run with `vtysh` in the current context. Example: `ip address 10.0.0.1 255.255.255.252` under `interface Gi0/0/0` becomes `configure terminal` / `interface eth1` / `ip address 10.0.0.1/30`. Translated commands include:
+  - OSPF `network` statements (wildcard masks) and `ip ospf N area`,
+  - BGP `network … mask` and address families (including `vrf` and `vpnv4`),
+  - static routes,
+  - `mpls ip` (LDP),
+  - loopbacks (Loopback0 is `lo`, others are dummy interfaces),
+  - subinterfaces: `interface Gi0/0/0.10` + `encapsulation dot1Q 10` creates the 802.1Q device and saves it to the lab.
+
+  Anything else is passed to FRR as typed, with interface names translated, so FRR-only commands keep working. FRR output and `show running-config` are translated back: port names, masks, `router ospf 1`.
+- **Switches**: commands edit the same props as the Config tab (VLANs, access/trunk, native/allowed VLANs, SVI, STP priority, shutdown, description) and re-run the switch script. Show output is built from those props plus live bridge state (`bridge fdb`, `/sys/class/net/br0/bridge`).
+- **Stored but no effect**: `service …`, `no ip domain-lookup`, line passwords and similar commands are saved and shown in `show running-config`, but change nothing.
+- **Real effect**: `enable secret` really gates `enable`; the banner is shown at login.
+- **Not supported**: features netlab doesn't have (packet ACLs on interfaces, NAT, EtherChannel, routed switch ports, VRF creation) print a `% netlab:` message instead of pretending.
+- **Sync**: device props changed from the CLI bump a revision. The browser pulls them in from the status poll, and the server keeps them if an older autosave arrives.
+
 ## Monitoring and alerting
 
 ![Monitoring and alerting pipeline](images/monitoring.svg)
@@ -131,5 +165,6 @@ A `vX.Y.Z` tag also publishes `X.Y.Z`. On the VM, `deploy/update.sh` pulls the n
 ## Known limits
 
 - The switch STP is the kernel bridge's 802.1D (about 30 s convergence). RSTP/MSTP needs Open vSwitch or mstpd, which is on the roadmap.
-- There are no Cisco images (licensing). The CLI is FRR's `vtysh`, and an IOS-syntax layer is on the roadmap.
+- There are no Cisco images (licensing). The IOS CLI is a translation layer over FRR: common IOS commands work, and anything it doesn't know goes to FRR as typed, so FRR's syntax rules apply there. One example is that FRR won't mix `network … area` with `ip ospf area` on the same router.
+- `?` lists the commands netlab translates. FRR-only commands work, but aren't listed.
 - Metrics come from the host and are per-container. They measure the Linux datapath, not a vendor ASIC.

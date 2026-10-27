@@ -7,8 +7,8 @@ IMAGE="${1:?usage: $0 ghcr.io/<github-user>/netlab:latest}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
 echo "== kernel modules (loaded at every boot)"
-printf "mpls_router\nmpls_iptunnel\nvrf\n8021q\nbridge\nsch_netem\n" | sudo tee /etc/modules-load.d/netlab.conf >/dev/null
-for m in mpls_router mpls_iptunnel vrf 8021q bridge sch_netem; do
+printf "mpls_router\nmpls_iptunnel\nvrf\n8021q\nbridge\nsch_netem\ndummy\n" | sudo tee /etc/modules-load.d/netlab.conf >/dev/null
+for m in mpls_router mpls_iptunnel vrf 8021q bridge sch_netem dummy; do
   sudo modprobe "$m" 2>/dev/null || { sudo apt-get install -y "linux-modules-extra-$(uname -r)"; sudo modprobe "$m"; }
 done
 

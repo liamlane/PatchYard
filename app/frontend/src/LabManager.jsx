@@ -146,12 +146,53 @@ function Share({ lab, notify, onOpenLab, close, refreshLabs }) {
   );
 }
 
+function Labs({ lab, notify, onOpenLab, refreshLabs, close }) {
+  const [list, setList] = useState(null);
+  const [busy, setBusy] = useState("");
+  const load = async () => {
+    try {
+      const ls = await api.labs();
+      const st = await Promise.all(ls.map((l) => api.status(l.name).then((s) => Object.keys(s.nodes || {}).length).catch(() => 0)));
+      setList(ls.map((l, i) => ({ ...l, running: st[i] })));
+    } catch (e) { notify(e.message, null, "bad"); }
+  };
+  useEffect(() => { load(); }, []); // eslint-disable-line
+  const del = async (l) => {
+    if (!confirm(`${l.running ? "Destroy and delete" : "Delete"} lab ${l.name}?\n\nThis removes its topology, saved configs and snapshots. There is no undo; export it first if you might want it back.`)) return;
+    setBusy(l.name);
+    try {
+      if (l.running) { const r = await api.destroy(l.name); if (!r.ok) throw new Error("destroy failed: " + (r.output || "").slice(-300)); }
+      await api.remove(l.name);
+      notify(`Deleted ${l.name}`, null, "ok");
+      if (lab?.name === l.name) onOpenLab("");
+      refreshLabs(); load();
+    } catch (e) { notify(e.message, null, "bad"); }
+    setBusy("");
+  };
+  if (!list) return <p className="hint">Loading labs…</p>;
+  return (
+    <table className="grid labs-tbl">
+      <thead><tr><th>Lab</th><th>Devices</th><th>Cables</th><th>State</th><th /></tr></thead>
+      <tbody>{list.map((l) => (
+        <tr key={l.name} className={lab?.name === l.name ? "cur" : ""}>
+          <td><button className="link" onClick={() => { close(); onOpenLab(l.name); }}>{l.name}</button>{lab?.name === l.name && <span className="hint"> (open)</span>}</td>
+          <td>{l.nodes}</td><td>{l.links}</td>
+          <td>{l.running ? <span className="schip s-ok">{l.running} running</span> : <span className="hint">not deployed</span>}</td>
+          <td><button className="link danger" disabled={busy === l.name} onClick={() => del(l)}>{busy === l.name ? "Working…" : l.running ? "Destroy & delete" : "Delete"}</button></td>
+        </tr>))}
+        {!list.length && <tr><td colSpan={5} className="empty">No labs yet.</td></tr>}
+      </tbody>
+    </table>
+  );
+}
+
 export default function LabManager({ lab, deployed, initial = "templates", notify, onOpenLab, onClose, refreshLabs, onReload, onRedeploy }) {
   const [tab, setTab] = useState(lab ? initial : "templates");
-  const tabs = [["templates", "Templates", "layers"], ...(lab ? [["snapshots", "Snapshots", "camera"]] : []), ["share", "Clone · export · import", "copy"]];
+  const tabs = [["labs", "Labs", "grid"], ["templates", "Templates", "layers"], ...(lab ? [["snapshots", "Snapshots", "camera"]] : []), ["share", "Clone · export · import", "copy"]];
   return (
     <Modal title="Lab manager" onClose={onClose} wide>
       <div className="seg mgr-tabs">{tabs.map(([k, l, i]) => <button key={k} className={tab === k ? "on" : ""} onClick={() => setTab(k)}><Icon name={i} size={15} /> {l}</button>)}</div>
+      {tab === "labs" && <Labs lab={lab} notify={notify} onOpenLab={onOpenLab} refreshLabs={refreshLabs} close={onClose} />}
       {tab === "templates" && <Templates notify={notify} onOpenLab={onOpenLab} close={onClose} />}
       {tab === "snapshots" && lab && <Snapshots lab={lab} deployed={deployed} notify={notify} onReload={onReload} onRedeploy={onRedeploy} />}
       {tab === "share" && <Share lab={lab} notify={notify} onOpenLab={onOpenLab} close={onClose} refreshLabs={refreshLabs} />}

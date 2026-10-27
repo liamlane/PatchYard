@@ -21,9 +21,10 @@ DEFAULT_RULES = [
 ]
 
 DEFAULTS = {
-    "general": {"live_edit": True},
+    "general": {"live_edit": True, "module_power_off": True, "cli_default": "ios"},
     "lab_defaults": {"frr_image": "quay.io/frrouting/frr:10.0.0", "pc_image": "ghcr.io/hellt/network-multitool",
-                     "alpine_image": "alpine:3.20", "mgmt_network": "clab-mgmt", "mgmt_subnet": "172.31.255.0/24", "link_mtu": 9500},
+                     "alpine_image": "alpine:3.20", "mgmt_network": "clab-mgmt", "mgmt_subnet": "172.31.255.0/24", "link_mtu": 9500,
+                     "router_model": "router-3s", "switch_model": "switch-24"},
     "monitoring": {"interval": 10, "retention_hours": 48, "health_interval": 30},
     "snapshots": {"auto_before_deploy": True, "keep_auto": 20},
     "alerts": {"enabled": True, "grace_s": 120, "rules": DEFAULT_RULES},
@@ -88,6 +89,13 @@ def validate(s: dict) -> dict:
     m["health_interval"] = max(10, min(600, float(m["health_interval"])))
     s["lab_defaults"]["link_mtu"] = int(max(1280, min(9500, int(s["lab_defaults"]["link_mtu"]))))
     s["snapshots"]["keep_auto"] = int(max(1, min(500, int(s["snapshots"]["keep_auto"]))))
+    from . import hardware
+    for k, typ in (("router_model", "router"), ("switch_model", "switch")):
+        v = s["lab_defaults"][k]
+        if v and (v not in hardware.CHASSIS or hardware.CHASSIS[v]["type"] != typ):  # "" = generic
+            raise ValueError(f"unknown {typ} model {v}")
+    if s["general"]["cli_default"] not in ("ios", "frr"):
+        raise ValueError("cli_default must be ios or frr")
     s["alerts"]["grace_s"] = max(0, min(3600, float(s["alerts"]["grace_s"])))
     if s["notifications"]["toast_min_severity"] not in SEVERITIES + ["none"]:
         raise ValueError("toast_min_severity must be info, warning, critical or none")

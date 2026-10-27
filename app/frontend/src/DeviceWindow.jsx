@@ -3,6 +3,8 @@ import { api } from "./api.js";
 import Terminal from "./Terminal.jsx";
 import { ICONS, TYPE_LABEL } from "./icons.jsx";
 import MonitorTab from "./Monitor.jsx";
+import HardwarePanel from "./Hardware.jsx";
+import { ifLabel, labIf } from "./hw.js";
 
 const TABS = {
   router: ["Physical", "Config", "CLI", "Monitor"],
@@ -20,7 +22,7 @@ function prefixToMask(p) {
   return [24, 16, 8, 0].map((s) => (n >>> s) & 255).join(".");
 }
 
-export default function DeviceWindow({ lab, node, state, z, onFocus, onClose, onUpdateNode, onRename, notify, initialPos, initialTab, tabKey }) {
+export default function DeviceWindow({ lab, node, state, z, onFocus, onClose, onUpdateNode, onRename, notify, initialPos, initialTab, tabKey, deployed, poweredOff, ifStates, settings, onStatus }) {
   const tabs = TABS[node.type] || ["Physical", "Config"];
   const [tab, setTab] = useState(initialTab && tabs.includes(initialTab) ? initialTab : tabs[node.type === "router" ? 2 : node.type === "pc" ? 2 : 0]);
   useEffect(() => { if (initialTab && tabs.includes(initialTab)) setTab(initialTab); }, [initialTab, tabKey]); // eslint-disable-line
@@ -44,7 +46,7 @@ export default function DeviceWindow({ lab, node, state, z, onFocus, onClose, on
       <header className="win-head" onMouseDown={(e) => !max && startDrag(e)} onDoubleClick={() => setMax(!max)} title="Drag to move, double-click to maximise">
         <Icon size={22} />
         <h2>{node.id}</h2>
-        <span className={`pill pill-${state || "off"}`}>{state || "not deployed"}</span>
+        <span className={`pill pill-${poweredOff ? "off" : state || "off"}`}>{poweredOff ? "powered off" : state || "not deployed"}</span>
         <button className="win-btn" onClick={() => setMax(!max)} aria-label={max ? "Restore window" : "Maximise window"}>{max ? "❐" : "□"}</button>
         <button className="win-x" onClick={onClose} aria-label="Close">×</button>
       </header>
@@ -54,11 +56,15 @@ export default function DeviceWindow({ lab, node, state, z, onFocus, onClose, on
         ))}
       </nav>
       <div className="win-body">
-        {tab === "Physical" && <Physical lab={lab} node={node} running={running} />}
+        {tab === "Physical" && <>
+          <HardwarePanel lab={lab} node={node} deployed={deployed} running={running} poweredOff={poweredOff} ifStates={ifStates} settings={settings}
+            onUpdateNode={onUpdateNode} notify={notify} onStatus={onStatus} />
+          <Physical lab={lab} node={node} running={running} />
+        </>}
         {tab === "Config" && node.type === "router" && <RouterConfig lab={lab} node={node} running={running} onUpdateNode={onUpdateNode} onRename={onRename} notify={notify} />}
-        {tab === "Config" && node.type === "switch" && <SwitchConfig lab={lab} node={node} running={running} onUpdateNode={onUpdateNode} onRename={onRename} notify={notify} />}
+        {tab === "Config" && node.type === "switch" && <SwitchConfig key={JSON.stringify(node.props || {})} lab={lab} node={node} running={running} onUpdateNode={onUpdateNode} onRename={onRename} notify={notify} />}
         {tab === "Config" && node.type !== "router" && node.type !== "switch" && <BasicConfig lab={lab} node={node} running={running} onUpdateNode={onUpdateNode} onRename={onRename} />}
-        {tab === "CLI" && (running ? <Terminal lab={lab.name} node={node.id} mode={node.type === "router" ? "vtysh" : "sh"} /> : <NotRunning />)}
+        {tab === "CLI" && (running ? <Cli lab={lab} node={node} settings={settings} /> : <NotRunning />)}
         {tab === "Desktop" && <Desktop lab={lab} node={node} running={running} onUpdateNode={onUpdateNode} notify={notify} />}
         {tab === "Services" && <Services lab={lab} node={node} running={running} onUpdateNode={onUpdateNode} notify={notify} />}
         {tab === "Monitor" && <MonitorTab lab={lab} node={node} running={running} />}
@@ -68,7 +74,28 @@ export default function DeviceWindow({ lab, node, state, z, onFocus, onClose, on
 }
 
 function NotRunning() {
-  return <p className="empty">Deploy the lab to use this tab.</p>;
+  return <p className="empty">Deploy the lab (and power the device on) to use this tab.</p>;
+}
+
+const CLI_MODES = { router: [["ios", "IOS"], ["vtysh", "FRR"], ["sh", "Shell"]], switch: [["ios", "IOS"], ["sh", "Shell"]] };
+function Cli({ lab, node, settings }) {
+  const modes = node.raw ? [[node.type === "router" ? "vtysh" : "sh", node.type === "router" ? "FRR" : "Shell"]] : CLI_MODES[node.type];
+  const def = settings?.general?.cli_default === "frr" && node.type === "router" ? "vtysh" : modes[0][0];
+  const [mode, setMode] = useState(() => { try { return localStorage.getItem(`netlab.cli.${node.type}`) || def; } catch { return def; } });
+  const m = modes.some(([k]) => k === mode) ? mode : modes[0][0];
+  const pick = (k) => { setMode(k); try { localStorage.setItem(`netlab.cli.${node.type}`, k); } catch { /* private mode */ } };
+  return (
+    <div className="cli">
+      {modes.length > 1 && (
+        <div className="row cli-bar">
+          <div className="seg">{modes.map(([k, l]) => <button key={k} className={m === k ? "on" : ""} onClick={() => pick(k)}>{l}</button>)}</div>
+          <span className="hint">{m === "ios" ? "IOS commands, translated to " + (node.type === "router" ? "FRR" : "the switch's VLAN/STP settings") + ". ? for help, Tab completes."
+            : m === "vtysh" ? "FRR's own CLI (vtysh)." : "Linux shell inside the device."}</span>
+        </div>
+      )}
+      <Terminal key={m} lab={lab.name} node={node.id} mode={m} />
+    </div>
+  );
 }
 
 function linksOf(lab, node) {
@@ -105,9 +132,9 @@ function Physical({ lab, node, running }) {
             const st = i ? i.state.toLowerCase() : "";
             return (
               <tr key={n}>
-                <td className="mono">{n}</td>
+                <td className="mono" title={n}>{ifLabel(node, n)}</td>
                 <td><span className={`led led-${st === "up" ? "up" : st === "unknown" ? "warn" : st ? "down" : "idle"}`} />{i ? i.state : "—"}</td>
-                <td>{l ? `${l.peer} ${l.peerIf}` : ""}</td>
+                <td>{l ? `${l.peer} ${labIf(lab, l.peer, l.peerIf)}` : ""}</td>
                 <td>{l ? l.media : ""}</td>
                 <td className="mono">{i?.mac || ""}</td>
                 <td className="mono">{i?.ipv4.join(", ") || ""}</td>
@@ -153,7 +180,8 @@ function BasicConfig(props) {
 function RouterConfig({ lab, node, running, onUpdateNode, onRename, notify }) {
   const links = linksOf(lab, node);
   const subifs = node.props?.subifs || [];
-  const ifOptions = [...links.map((l) => l.ifname), ...subifs.map((x) => `${x.parent}.${x.vlan}`), "lo"];
+  const ifOptions = [...links.map((l) => l.ifname), ...subifs.map((x) => `${x.parent}.${x.num || x.vlan}`), "lo"];
+  const lbl = (i) => ifLabel(node, i);
   const [si, setSi] = useState({ parent: links[0]?.ifname || "eth1", vlan: "" });
   const subif = async (parent, vlan, action) => {
     try {
@@ -224,7 +252,7 @@ function RouterConfig({ lab, node, running, onUpdateNode, onRename, notify }) {
         </fieldset>
         <fieldset className="box"><legend>Interface</legend>
           <label className="row">Port
-            <select value={f.ifname} onChange={set("ifname")}>{ifOptions.map((i) => <option key={i}>{i}</option>)}</select>
+            <select value={f.ifname} onChange={set("ifname")}>{ifOptions.map((i) => <option key={i} value={i}>{lbl(i)}</option>)}</select>
             <label className="chk"><input type="checkbox" checked={f.up} onChange={set("up")} /> Port on</label>
           </label>
           <label className="row">IPv4 address <input placeholder="10.0.0.1/30" value={f.ip} onChange={set("ip")} /></label>
@@ -233,12 +261,12 @@ function RouterConfig({ lab, node, running, onUpdateNode, onRename, notify }) {
         </fieldset>
         <fieldset className="box"><legend>VLAN subinterfaces (router-on-a-stick)</legend>
           <label className="row">Parent port
-            <select value={si.parent} onChange={(e) => setSi({ ...si, parent: e.target.value })}>{links.map((l) => <option key={l.ifname}>{l.ifname}</option>)}</select>
+            <select value={si.parent} onChange={(e) => setSi({ ...si, parent: e.target.value })}>{links.map((l) => <option key={l.ifname} value={l.ifname}>{lbl(l.ifname)}</option>)}</select>
             VLAN <input className="narrow" placeholder="10" value={si.vlan} onChange={(e) => setSi({ ...si, vlan: e.target.value.replace(/\D/g, "") })} />
             <button disabled={!si.vlan || !links.length} onClick={() => { subif(si.parent, si.vlan, "add"); setSi({ ...si, vlan: "" }); }}>Add</button>
           </label>
           {subifs.length > 0 && <p className="hint">{subifs.map((x) => (
-            <span key={`${x.parent}.${x.vlan}`} className="mono">{x.parent}.{x.vlan} <button className="link" onClick={() => subif(x.parent, x.vlan, "del")}>remove</button>{"  "}</span>
+            <span key={`${x.parent}.${x.vlan}`} className="mono">{lbl(`${x.parent}.${x.num || x.vlan}`)} <button className="link" onClick={() => subif(x.parent, x.vlan, "del")}>remove</button>{"  "}</span>
           ))}</p>}
           <p className="hint">Creates the tagged subinterface; then address it in the Interface box. Cable the parent port to a switch trunk.</p>
         </fieldset>
@@ -253,7 +281,7 @@ function RouterConfig({ lab, node, running, onUpdateNode, onRename, notify }) {
           <label className="row">Network <input placeholder="10.0.0.0/30" value={f.oNet} onChange={set("oNet")} />
             Area <input className="narrow" value={f.oArea} onChange={set("oArea")} /></label>
           <label className="row">Passive interface
-            <select value={f.oPassive} onChange={set("oPassive")}><option value="">none</option>{ifOptions.map((i) => <option key={i}>{i}</option>)}</select></label>
+            <select value={f.oPassive} onChange={set("oPassive")}><option value="">none</option>{ifOptions.map((i) => <option key={i} value={i}>{lbl(i)}</option>)}</select></label>
           <button disabled={busy} onClick={ospf}>Apply OSPF</button>
         </fieldset>
         <fieldset className="box"><legend>BGP</legend>
@@ -456,7 +484,7 @@ function SwitchConfig({ lab, node, running, onUpdateNode, onRename, notify }) {
                 const c = port(l.ifname);
                 return (
                   <tr key={l.ifname}>
-                    <td className="mono">{l.ifname}</td><td>{l.peer}</td>
+                    <td className="mono" title={l.ifname}>{ifLabel(node, l.ifname)}</td><td>{l.peer}</td>
                     <td><select value={c.mode} onChange={(e) => setPort(l.ifname, "mode", e.target.value)}><option value="access">access</option><option value="trunk">trunk</option></select></td>
                     <td><select value={c.mode === "trunk" ? c.native : c.vlan} onChange={(e) => setPort(l.ifname, c.mode === "trunk" ? "native" : "vlan", Number(e.target.value))}>
                       {ids.map((id) => <option key={id} value={id}>{id}{vname(id) ? ` ${vname(id)}` : ""}</option>)}</select></td>

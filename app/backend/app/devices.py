@@ -4,9 +4,35 @@ from . import labs, netinfo
 from .util import dexec, dsh, check_ip, check_if, check_host, container_states, run, cname
 
 PC_RC = r"""
-alias ipconfig='echo; ip -4 addr show eth1 | sed -n "s/ *inet /IPv4 Address......: /p"; ip route | sed -n "s/^default via \([^ ]*\).*/Default Gateway...: \1/p"; sed -n "s/^nameserver /DNS Server........: /p" /etc/resolv.conf; echo'
+# netlab PC command prompt: Windows-style helpers on top of the Linux tools
+__dhcp() { h=/usr/local/bin/netlab-dhcp; [ -x "$h" ] || h=/tmp/netlab-dhcp; echo "$h"; }
+ipconfig() {
+  case "$1" in
+    ""|"/?")
+      [ "$1" = "/?" ] && { echo "ipconfig [/all | /release | /renew]"; return; }
+      echo; echo "Ethernet adapter eth1:"; echo
+      ip -4 addr show eth1 | sed -n "s/ *inet \([^/]*\)\/\([0-9]*\).*/   IPv4 Address. . . . . . . . . . . : \1\n   Prefix Length . . . . . . . . . . : \/\2/p"
+      ip route | sed -n "s/^default via \([^ ]*\).*/   Default Gateway . . . . . . . . . : \1/p"; echo ;;
+    /all)
+      echo; echo "   Host Name . . . . . . . . . . . . : $(hostname)"; echo; echo "Ethernet adapter eth1:"; echo
+      echo "   Physical Address. . . . . . . . . : $(cat /sys/class/net/eth1/address 2>/dev/null | tr a-f: A-F-)"
+      echo "   DHCP Enabled. . . . . . . . . . . : $(pgrep udhcpc >/dev/null && echo Yes || echo No)"
+      ip -4 addr show eth1 | sed -n "s/ *inet \([^/]*\)\/\([0-9]*\).*/   IPv4 Address. . . . . . . . . . . : \1\n   Prefix Length . . . . . . . . . . : \/\2/p"
+      ip route | sed -n "s/^default via \([^ ]*\).*/   Default Gateway . . . . . . . . . : \1/p"
+      sed -n "s/^nameserver /   DNS Servers . . . . . . . . . . . : /p" /etc/resolv.conf; echo ;;
+    /release)
+      pkill udhcpc 2>/dev/null; ip -4 addr flush dev eth1; ip route del default 2>/dev/null
+      echo; echo "Ethernet adapter eth1: address released."; echo ;;
+    /renew)
+      echo "Requesting an address on eth1..."
+      udhcpc -i eth1 -n -q -t 4 -T 2 -s "$(__dhcp)" 2>&1 | grep -E "lease|no lease|fail" ; ipconfig ;;
+    *) echo "Error: unrecognized or incomplete command line."; echo "ipconfig [/all | /release | /renew]" ;;
+  esac
+}
 alias tracert='traceroute -n'
 alias cls='clear'
+alias udhcpc='udhcpc -s "$(__dhcp)"'
+arp() { [ "$1" = "-a" ] || { command arp "$@"; return; }; echo; echo "  Internet Address      Physical Address      Type"; ip -4 neigh show dev eth1 | awk '$3=="lladdr"{printf "  %-21s %-21s dynamic\n", $1, $4}'; echo; }
 PS1='C:\> '
 """
 
@@ -94,7 +120,9 @@ async def ipconfig(lab, node, body: dict):
         if body.get("dns"):
             script.append(f"echo nameserver {check_ip(body['dns'])} > /etc/resolv.conf")
     else:
-        script.append("udhcpc -i eth1 -n -q -t 4 -T 2")
+        # labs deployed before 0.10.1 don't have the hook mounted: install it under /tmp
+        await dexec(lab, node, "sh", "-c", "cat > /tmp/netlab-dhcp && chmod +x /tmp/netlab-dhcp", input=labs.DHCP_SCRIPT.encode())
+        script.append("udhcpc -i eth1 -n -q -t 4 -T 2 -s /tmp/netlab-dhcp")
     rc, out, err = await dsh(lab, node, "; ".join(script) + "; ip -4 addr show eth1; ip route", timeout=30)
     return {"ok": rc == 0, "output": (out + err).strip()}
 
@@ -146,6 +174,8 @@ async def link_status(lab: dict) -> dict:
 
 async def write_pc_rc(lab, node):
     await dexec(lab, node, "sh", "-c", "cat > /etc/netlab.rc", input=PC_RC.encode())
+    await dexec(lab, node, "sh", "-c", "[ -x /usr/local/bin/netlab-dhcp ] || { cat > /tmp/netlab-dhcp && chmod +x /tmp/netlab-dhcp; }",
+                input=labs.DHCP_SCRIPT.encode())
 
 
 # ---------------- switching (802.1Q) ----------------
@@ -165,8 +195,8 @@ async def switch_show(lab, node):
     return {"ok": rc == 0, "output": (out + err).strip()}
 
 
-async def subif(lab, node, parent: str, vlan: int, add: bool):
-    name = check_if(f"{check_if(parent)}.{labs.vlan_id(vlan)}")
+async def subif(lab, node, parent: str, vlan: int, add: bool, name: str | None = None):
+    name = check_if(name or f"{check_if(parent)}.{labs.vlan_id(vlan)}")
     if add:
         script = f"ip link add link {parent} name {name} type vlan id {int(vlan)} && ip link set {name} up; ip -br link show {name}"
     else:

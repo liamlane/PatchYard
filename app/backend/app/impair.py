@@ -5,7 +5,7 @@ after every deploy. netem shapes egress, so "both" applies it on each end.
 """
 import asyncio
 from .util import run, check_if
-from . import netinfo
+from . import netinfo, hardware
 
 PRESETS = {
     "clean":        {"label": "Clean (no impairment)"},
@@ -76,24 +76,34 @@ async def _ns(pid, *cmd):
 
 
 async def apply(labd, link, cfg: dict | None) -> dict:
-    """cfg None/empty -> remove impairment."""
+    """cfg None/empty -> remove impairment. Port speed (chassis devices) stays applied:
+    the link runs at the slower end's speed, or the impairment's rate if that's lower."""
     c = clean(cfg or {})
-    args = netem_args(c)
+    user_args = netem_args(c)
+    base = hardware.link_kbit(labd, link)
+    eff = dict(c)
+    if base and (not eff.get("rate") or eff["rate"] > base):
+        eff["rate"] = base
+    args = netem_args(eff)
     out, ok = [], True
     for e in await _ends(labd, link):
         if not e["pid"]:
             out.append(f"{e['node']} {e['if']}: not running (host bridge or stopped), skipped")
             continue
         egress = c["dir"] == "both" or (c["dir"] == "a2b" and e["side"] == "a") or (c["dir"] == "b2a" and e["side"] == "b")
-        if args and egress:
-            rc, o, err = await _ns(e["pid"], "tc", "qdisc", "replace", "dev", e["if"], "root", "netem", *args)
+        a = args if egress else (netem_args({"rate": base}) if base else [])
+        if a:
+            rc, o, err = await _ns(e["pid"], "tc", "qdisc", "replace", "dev", e["if"], "root", "netem", *a)
         else:
             rc, o, err = await _ns(e["pid"], "tc", "qdisc", "del", "dev", e["if"], "root")
             if rc and ("No such file" in err or "Cannot delete qdisc with handle of zero" in err or "Invalid handle" in err):
                 rc, err = 0, ""
         ok &= rc == 0
-        out.append(f"{e['node']} {e['if']}: " + ("netem " + " ".join(args) if args and egress else "no impairment") + (f"  ERROR {err.strip()}" if rc else ""))
-    return {"ok": ok, "output": "\n".join(out), "impair": c if args else None}
+        what = ("netem " + " ".join(a)) if a else "no impairment"
+        if base and not user_args:
+            what = f"port speed {hardware.fmt_speed(base)}"
+        out.append(f"{e['node']} {e['if']}: {what}" + (f"  ERROR {err.strip()}" if rc else ""))
+    return {"ok": ok, "output": "\n".join(out), "impair": c if user_args else None}
 
 
 async def set_state(labd, link, up: bool) -> dict:
@@ -125,6 +135,10 @@ async def reapply_all(labd) -> list[str]:
         if l.get("impair"):
             r = await apply(labd, l, l["impair"])
             notes.append(f"{l['a']}-{l['b']}: impairment {'restored' if r['ok'] else 'FAILED'}")
+        elif hardware.link_kbit(labd, l):
+            r = await apply(labd, l, None)
+            if not r["ok"]:
+                notes.append(f"{l['a']}-{l['b']}: port speed FAILED")
         if l.get("admin") == "down":
             r = await set_state(labd, l, False)
             notes.append(f"{l['a']}-{l['b']}: kept admin down")

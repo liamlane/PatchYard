@@ -11,6 +11,8 @@ import LabManager, { MiniTopo } from "./LabManager.jsx";
 import Palette from "./Palette.jsx";
 import Settings from "./Settings.jsx";
 import { NotificationsPanel, TrafficPanel, Login } from "./Notifications.jsx";
+import { PortMenu } from "./Hardware.jsx";
+import { setCatalogue, portsOf, defaultHardware, labIf } from "./hw.js";
 import { Icon, TB, Toasts, Modal, Menu, fmtBps } from "./ui.jsx";
 
 const nodeTypes = { device: DeviceNode, note: NoteNode, area: AreaNode };
@@ -38,6 +40,10 @@ function Workspace() {
   const [status, setStatus] = useState({ nodes: {}, ifaces: {}, capturing: false });
   const [tool, setTool] = useState("select");
   const [pick, setPick] = useState(null);
+  const [pickIf, setPickIf] = useState(null);
+  const [portMenu, setPortMenu] = useState(null);
+  const [hwv, setHwv] = useState(0);
+  const revRef = useRef(0);
   const [sel, setSel] = useState(new Set());
   const [selEdge, setSelEdge] = useState(null);
   const [wins, setWins] = useState([]);
@@ -109,6 +115,7 @@ function Workspace() {
     if (!auth.checked || auth.need) return;
     refreshLabs(); api.presets().then(setPresets).catch(() => {}); api.templates().then(setTpls).catch(() => {});
     api.settings().then(setAppSettings).catch(() => {});
+    api.hardware().then((c) => { setCatalogue(c); setHwv((v) => v + 1); }).catch(() => {});
   }, [refreshLabs, auth.checked, auth.need]);
   const beep = () => {
     try { const a = new AudioContext(), o = a.createOscillator(), g = a.createGain(); o.frequency.value = 880; g.gain.value = 0.08; o.connect(g); g.connect(a.destination); o.start(); o.stop(a.currentTime + 0.25); } catch { /* no audio */ }
@@ -138,7 +145,7 @@ function Workspace() {
 
   const openLab = async (name) => {
     setWins([]); setSel(new Set()); setSelEdge(null); setEvents([]); lastId.current = 0; setSim(false); setLive(null); setLinkHist({});
-    past.current = []; future.current = []; setHv((v) => v + 1); liveBase.current = null;
+    past.current = []; future.current = []; setHv((v) => v + 1); liveBase.current = null; revRef.current = 0; setPick(null); setPickIf(null); setPortMenu(null);
     if (!name) { setLab(null); store.set("netlab.last", null); return; }
     try { setLab(await api.get(name)); store.set("netlab.last", name); setTimeout(() => rf.fitView({ padding: 0.15, duration: 400 }), 120); }
     catch (e) { notify(e.message, null, "bad"); }
@@ -163,7 +170,7 @@ function Workspace() {
   // autosave
   useEffect(() => {
     if (!dirty || !lab) return;
-    const t = setTimeout(() => api.save(lab).then(() => setDirty(false)).catch((e) => notify(`Save failed: ${e.message}`, null, "bad")), 900);
+    const t = setTimeout(() => api.save(lab, revRef.current).then(() => setDirty(false)).catch((e) => notify(`Save failed: ${e.message}`, null, "bad")), 900);
     return () => clearTimeout(t);
   }, [lab, dirty, notify]);
 
@@ -171,11 +178,22 @@ function Workspace() {
   useEffect(() => {
     if (!lab) return;
     let alive = true;
-    const load = () => api.status(lab.name).then((s) => { if (alive) { setStatus(s); setCapturing(s.capturing); } }).catch(() => {});
+    const load = () => api.status(lab.name).then((s) => { if (alive) { setStatus(s); setCapturing(s.capturing); pullServerProps(s); } }).catch(() => {});
     load(); const t = setInterval(load, 4000);
     return () => { alive = false; clearInterval(t); };
   }, [lab?.name]);
+  // device props changed on the server (IOS CLI, power) -> merge them into the open lab
+  const pullServerProps = (s) => {
+    if (!s || s.rev == null || s.rev <= revRef.current) return;
+    const newer = Object.entries(s.rev_nodes || {}).filter(([, r]) => r > revRef.current).map(([n]) => n);
+    revRef.current = s.rev;
+    const name = labRef.current?.name;
+    if (!newer.length || !name) return;
+    api.get(name).then((fresh) => setLab((l) => (l && l.name === fresh.name ? {
+      ...l, nodes: l.nodes.map((n) => (newer.includes(n.id) ? { ...n, props: (fresh.nodes.find((f) => f.id === n.id) || n).props } : n)) } : l))).catch(() => {});
+  };
   const states = status.nodes || {};
+  const powerOff = new Set(status.power_off || []);
   const deployed = Object.keys(states).length > 0;
   const paused = Object.values(states).some((s) => s === "paused");
   const liveEdit = appSettings?.general?.live_edit !== false;
@@ -196,7 +214,7 @@ function Workspace() {
     const delL = base.links.filter((l) => (!cl.has(l.id) || key(cl.get(l.id)) !== key(l)) && cn.has(l.a) && cn.has(l.b));
     if (!addN.length && !delN.length && !addL.length && !delL.length) return;
     liveBase.current = JSON.parse(JSON.stringify(cur));
-    await api.save(cur); setDirty(false);
+    await api.save(cur, revRef.current); setDirty(false);
     const out = [], bad = [];
     const go = async (fn, label) => { try { const r = await fn(); (r.ok === false ? bad : out).push(r.output || label); } catch (e) { bad.push(`${label}: ${e.message}`); } };
     for (const l of delL) await go(() => api.liveUnlink(cur.name, l), `unplug ${l.a}–${l.b}`);
@@ -293,16 +311,16 @@ function Workspace() {
     }));
     const devs = (lab?.nodes || []).map((n) => ({
       id: n.id, type: "device", position: { x: n.x, y: n.y }, selected: sel.has(n.id), measured: dims[n.id], zIndex: 3,
-      data: { label: n.id, type: n.type, state: states[n.id], cablePick: pick === n.id, overlay, cpu: liveNodes[n.id]?.cpu, hit: hit === n.id, alert: alertSum?.nodes?.[lab.name]?.[n.id] },
+      data: { label: n.id, type: n.type, state: powerOff.has(n.id) ? "poweroff" : states[n.id], cablePick: pick === n.id, overlay, cpu: liveNodes[n.id]?.cpu, hit: hit === n.id, alert: alertSum?.nodes?.[lab.name]?.[n.id] },
     }));
     return [...anns, ...devs];
   }, [lab, sel, states, pick, dims, overlay, liveNodes, hit, annChange, alertSum]);
   const presetLabel = (im) => (im?.preset && presets[im.preset] ? { ...im, presetLabel: presets[im.preset].label } : im);
   const rfEdges = useMemo(() => (lab?.links || []).map((l) => ({
     id: l.id, source: l.a, target: l.b, type: "cable", selected: selEdge === l.id, zIndex: 1,
-    data: { media: l.media, aIf: l.a_if, bIf: l.b_if, showIf, aState: status.ifaces?.[l.a]?.[l.a_if], bState: status.ifaces?.[l.b]?.[l.b_if],
+    data: { media: l.media, aIf: labIf(lab, l.a, l.a_if), bIf: labIf(lab, l.b, l.b_if), showIf, aState: status.ifaces?.[l.a]?.[l.a_if], bState: status.ifaces?.[l.b]?.[l.b_if],
       anim: anim && anim.link === l.id ? anim : null, rate: live?.links?.[l.id], overlay, impair: presetLabel(l.impair), admin: l.admin },
-  })), [lab, selEdge, showIf, status, anim, live, overlay, presets]); // eslint-disable-line
+  })), [lab, selEdge, showIf, status, anim, live, overlay, presets, hwv]); // eslint-disable-line
 
   const onNodesChange = (changes) => {
     const devDims = changes.filter((c) => c.type === "dimensions" && c.dimensions && !c.id.startsWith("ann-"));
@@ -342,7 +360,7 @@ function Workspace() {
     return rf.screenToFlowPosition({ x: r.left + r.width / 2 + (Math.random() * 80 - 40), y: r.top + r.height / 2 + (Math.random() * 80 - 40) });
   };
   const newIdFrom = (used, type) => { let i = 1; while (used.has(`${PREFIX[type]}${i}`)) i++; return `${PREFIX[type]}${i}`; };
-  const defaultProps = (type) => (type === "server" ? { ip_mode: "static", services: { http: { enabled: true } } } : type === "pc" ? { ip_mode: "static" } : {});
+  const defaultProps = (type) => (type === "server" ? { ip_mode: "static", services: { http: { enabled: true } } } : type === "pc" ? { ip_mode: "static" } : defaultHardware(type, appSettings));
   const addNode = (type, pos) => {
     if (!lab) return;
     const id = newIdFrom(new Set(lab.nodes.map((n) => n.id)), type);
@@ -354,15 +372,25 @@ function Workspace() {
     const used = lab.links.flatMap((k) => [k.a === id && k.a_if, k.b === id && k.b_if]).filter(Boolean);
     let i = 1; while (used.includes(`eth${i}`)) i++; return `eth${i}`;
   };
-  const onNodeClick = (_, n) => {
-    if (n.id.startsWith("ann-")) return;
-    if (tool === "select") return openWin(n.id);
-    if (!pick) return setPick(n.id);
-    if (pick === n.id) return setPick(null);
-    const link = { id: `l${Date.now().toString(36)}`, a: pick, a_if: nextIf(pick), b: n.id, b_if: nextIf(n.id), media: tool };
+  const choosePort = (n, ev, then) => {
+    if (!portsOf(n)) return then(nextIf(n.id));
+    setPortMenu({ node: n.id, x: ev?.clientX ?? 300, y: ev?.clientY ?? 200, then });
+  };
+  const connect = (a, aIf, b, bIf) => {
+    const link = { id: `l${Date.now().toString(36)}`, a, a_if: aIf, b, b_if: bIf, media: tool === "select" ? "copper" : tool };
     change((l) => ({ ...l, links: [...l.links, link] }));
-    notify(`Connected ${link.a} ${link.a_if} ↔ ${link.b} ${link.b_if}`, deployed ? (liveEdit ? "Wiring it now…" : "Redeploy to wire it") : null);
-    setPick(null);
+    notify(`Connected ${a} ${labIf(lab, a, aIf)} ↔ ${b} ${labIf(lab, b, bIf)}`, deployed ? (liveEdit ? "Wiring it now…" : "Redeploy to wire it") : null);
+    setPick(null); setPickIf(null);
+  };
+  const onNodeClick = (ev, rn) => {
+    if (rn.id.startsWith("ann-")) return;
+    if (tool === "select") return openWin(rn.id);
+    const n = lab.nodes.find((x) => x.id === rn.id);
+    if (!n) return;
+    if (!pick) return choosePort(n, ev, (ifn) => { setPick(n.id); setPickIf(ifn); });
+    if (pick === n.id) { setPick(null); setPickIf(null); return; }
+    const a = pick, aIf = pickIf;
+    choosePort(n, ev, (ifn) => connect(a, aIf, n.id, ifn));
   };
   const openWin = (node, tab) => {
     setZTop((z) => z + 1);
@@ -377,6 +405,8 @@ function Workspace() {
     if (lab.nodes.some((n) => n.id === nu)) return notify(`${nu} already exists.`, null, "bad");
     change((l) => ({ ...l, nodes: l.nodes.map((n) => (n.id === old ? { ...n, id: nu } : n)), links: l.links.map((k) => ({ ...k, a: k.a === old ? nu : k.a, b: k.b === old ? nu : k.b })) }));
     setWins((w) => w.map((x) => (x.node === old ? { ...x, node: nu } : x)));
+    api.renameFiles(lab.name, old, nu).then((r) => r.moved && notify(`Renamed ${old} to ${nu}`, "Its saved configuration moved with it.", "ok"))
+      .catch((e) => notify(`Renamed, but the config folder didn't move: ${e.message}`, null, "warn"));
   };
   const focusNode = (id) => {
     const n = lab?.nodes.find((x) => x.id === id);
@@ -412,7 +442,7 @@ function Workspace() {
   const linkSaved = (id, patch) => quiet((l) => ({ ...l, links: l.links.map((x) => (x.id === id ? Object.fromEntries(Object.entries({ ...x, ...patch }).filter(([, v]) => v !== undefined)) : x)) }));
 
   // ---------- lab actions ----------
-  const flush = async () => { if (dirty && lab) { await api.save(lab); setDirty(false); } };
+  const flush = async () => { if (dirty && lab) { await api.save(lab, revRef.current); setDirty(false); } };
   const doDeploy = async () => {
     setBusy(deployed ? "Redeploying. Running configs are saved first." : "Deploying the lab. First runs pull images and can take a few minutes.");
     try {
@@ -493,7 +523,7 @@ function Workspace() {
       { label: "Config", icon: "grid", onClick: () => openWin(d.id, "Config") },
       "-",
       { label: "Duplicate", icon: "copy", kbd: "Ctrl+D", onClick: () => { setSel(new Set([d.id])); setTimeout(() => keys.current.duplicate(), 0); } },
-      { label: "Start cable from here", icon: "link", onClick: () => { setTool("copper"); setPick(d.id); } },
+      { label: "Start cable from here", icon: "link", onClick: () => { setTool(tool === "select" ? "copper" : tool); setPick(null); choosePort(d, e, (ifn) => { setPick(d.id); setPickIf(ifn); }); } },
       { label: "Generate traffic from here", icon: "flow", disabled: !running, onClick: () => { if (sim) toggleSim(); setTrafficPreset({ src: d.id, k: Date.now() }); setSide("traffic"); } },
       "-",
       { label: "Delete device", icon: "trash", danger: true, onClick: () => { change((l) => ({ ...l, nodes: l.nodes.filter((x) => x.id !== d.id), links: l.links.filter((k) => k.a !== d.id && k.b !== d.id) })); setWins((w) => w.filter((x) => x.node !== d.id)); } },
@@ -573,10 +603,10 @@ function Workspace() {
       if (mod && key === "s") { e.preventDefault(); if (k.deployed) k.doSaveConfigs(); return; }
       if (mod && key === "a" && k.lab) { e.preventDefault(); setSel(new Set(k.lab.nodes.map((n) => n.id))); return; }
       if (mod || e.altKey) return;
-      const map = { v: () => { setTool("select"); setPick(null); }, c: () => setTool("copper"), f: () => setTool("fibre"), n: () => k.addAnn("note"), a: () => k.addAnn("area"),
+      const map = { v: () => { setTool("select"); setPick(null); setPickIf(null); setPortMenu(null); }, c: () => setTool("copper"), f: () => setTool("fibre"), s: () => setTool("serial"), n: () => k.addAnn("note"), a: () => k.addAnn("area"),
         g: () => setSnap((v) => !v), o: () => setOverlay((v) => !v), m: () => k.lab && setSide((s) => (s ? null : "dash")), t: () => setTheme((t) => (t === "dark" ? "light" : "dark")),
         "?": () => setHelp(true), ",": () => setSettingsTab("general"), 1: () => k.addNode("router"), 2: () => k.addNode("switch"), 3: () => k.addNode("pc"), 4: () => k.addNode("server"),
-        escape: () => { setPick(null); setSel(new Set()); setSelEdge(null); setMenu(null); } };
+        escape: () => { setPick(null); setPickIf(null); setPortMenu(null); setSel(new Set()); setSelEdge(null); setMenu(null); } };
       if (map[key] && (k.lab || ["t", "?", ",", "escape"].includes(key))) { e.preventDefault(); map[key](); }
     };
     window.addEventListener("keydown", h);
@@ -646,12 +676,12 @@ function Workspace() {
           );
         })}
         <h3>Cables</h3>
-        {[["select", "Select", "V"], ["copper", "Copper", "C"], ["fibre", "Fibre", "F"]].map(([k, l, kb]) => (
+        {[["select", "Select", "V"], ["copper", "Copper", "C"], ["fibre", "Fibre", "F"], ["serial", "Serial", "S"]].map(([k, l, kb]) => (
           <button key={k} disabled={!lab} className={`pal tool ${tool === k ? "on" : ""} tool-${k}`} onClick={() => { setTool(k); setPick(null); }} title={`${l} (${kb})`}>
             {k === "select" ? <span className="arrow">↖</span> : <CableIcon />}<span>{l}</span>
           </button>
         ))}
-        {tool !== "select" && <p className="hint">{pick ? `Now click the device to connect ${pick} to.` : "Click the first device."}</p>}
+        {tool !== "select" && <p className="hint">{pick ? `Now click the device to connect ${pick} ${labIf(lab, pick, pickIf)} to.` : "Click the first device."}</p>}
         <h3>Annotate</h3>
         <button className="pal tool" disabled={!lab} onClick={() => addAnn("note")} title="Note (N)"><Icon name="note" size={22} /><span>Note</span></button>
         <button className="pal tool" disabled={!lab} onClick={() => addAnn("area")} title="Area (A)"><Icon name="area" size={22} /><span>Area</span></button>
@@ -664,7 +694,7 @@ function Workspace() {
           <ReactFlow nodes={rfNodes} edges={rfEdges} nodeTypes={nodeTypes} edgeTypes={edgeTypes}
             onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} onNodeClick={onNodeClick}
             onNodeContextMenu={onNodeContextMenu} onEdgeContextMenu={onEdgeContextMenu} onPaneContextMenu={onPaneContextMenu}
-            onPaneClick={() => { setPick(null); setMenu(null); }} deleteKeyCode={["Delete", "Backspace"]} multiSelectionKeyCode={["Meta", "Control"]}
+            onPaneClick={() => { setPick(null); setPickIf(null); setMenu(null); setPortMenu(null); }} deleteKeyCode={["Delete", "Backspace"]} multiSelectionKeyCode={["Meta", "Control"]}
             snapToGrid={snap} snapGrid={[24, 24]} nodesConnectable={false} fitView minZoom={0.15} maxZoom={2.5} proOptions={{ hideAttribution: true }}>
             <Background gap={24} size={snap ? 2 : 1.5} color="var(--grid)" />
             <Controls showInteractive={false} />
@@ -692,12 +722,20 @@ function Workspace() {
             onEdit={updLink} onLinkSaved={linkSaved} notify={notify} onClose={() => setSelEdge(null)}
             onDelete={() => { change((l) => ({ ...l, links: l.links.filter((x) => x.id !== edge.id) })); setSelEdge(null); }} />
         )}
+        {portMenu && lab && (() => {
+          const n = lab.nodes.find((x) => x.id === portMenu.node);
+          return n ? <PortMenu lab={lab} node={n} x={portMenu.x} y={portMenu.y} media={tool === "select" ? "copper" : tool}
+            otherMedia={pick && pick !== n.id ? (portsOf(lab.nodes.find((x) => x.id === pick)) || []).find((p) => p.if === pickIf)?.media : null}
+            onPick={(ifn) => { const f = portMenu.then; setPortMenu(null); f(ifn); }} onClose={() => setPortMenu(null)} /> : null;
+        })()}
         {wins.map((w) => {
           const n = lab?.nodes.find((x) => x.id === w.node);
           return n ? (
             <DeviceWindow key={w.node} lab={lab} node={n} state={states[n.id]} z={w.z} initialPos={w.pos} initialTab={w.tab} tabKey={w.tk}
               onFocus={() => focusWin(w.node)} onClose={() => setWins((x) => x.filter((y) => y.node !== w.node))}
-              onUpdateNode={updateNode} onRename={renameNode} notify={notify} />
+              onUpdateNode={updateNode} onRename={renameNode} notify={notify}
+              deployed={deployed} poweredOff={powerOff.has(n.id)} ifStates={status.ifaces?.[n.id]} settings={appSettings}
+              onStatus={() => api.status(lab.name).then((s) => { setStatus(s); pullServerProps(s); }).catch(() => {})} />
           ) : null;
         })}
       </main>
@@ -775,7 +813,7 @@ function Welcome({ labs, tpls, onOpen, onNew, onTemplate, onManager }) {
 const KEYS = [
   ["Ctrl+K / Ctrl+F", "Find a device or run a command"], ["Ctrl+Z · Ctrl+Y", "Undo · redo (topology, positions, notes)"], ["Ctrl+D", "Duplicate selected devices"],
   ["Ctrl+A", "Select all devices"], ["Shift+drag", "Box select"], ["Ctrl+click", "Add to selection"], ["Delete", "Delete selection"], ["Ctrl+S", "Save running configs"],
-  ["1 2 3 4", "Add router · switch · PC · server"], ["V · C · F", "Select · copper · fibre tool"], ["N · A", "Add note · area"],
+  ["1 2 3 4", "Add router · switch · PC · server"], ["V · C · F · S", "Select · copper · fibre · serial tool"], ["N · A", "Add note · area"],
   ["O", "Traffic overlay"], ["M", "Dashboard"], ["G", "Snap to grid"], ["T", "Dark / light"], ["Right-click", "Context menu on devices, cables, canvas"],
   ["Double-click", "Edit a note or area label · maximise a window"], [",", "Settings"], ["Esc", "Cancel / clear selection"],
 ];

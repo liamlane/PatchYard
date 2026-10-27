@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { catalogue } from "./hw.js";
 import { api } from "./api.js";
 import { Modal, Icon } from "./ui.jsx";
 
@@ -41,6 +42,11 @@ export default function Settings({ onClose, notify, labs, lab, appearance, onSav
             <h3>General</h3>
             <Field label="Live editing" hint="Devices and cables you add to a running lab start and wire immediately. Off = changes wait for Redeploy.">
               <input type="checkbox" checked={s.general.live_edit} onChange={(e) => upd("general", "live_edit", e.target.checked)} /></Field>
+            <Field label="Power off to swap modules" hint="Like real hardware: a running device must be powered off (Physical tab) before modules go in or out. Off = swap any time.">
+              <input type="checkbox" checked={s.general.module_power_off !== false} onChange={(e) => upd("general", "module_power_off", e.target.checked)} /></Field>
+            <Field label="Router CLI opens in" hint="The CLI tab can switch between IOS, FRR and shell at any time.">
+              <select value={s.general.cli_default || "ios"} onChange={(e) => upd("general", "cli_default", e.target.value)}>
+                <option value="ios">IOS syntax</option><option value="frr">FRR (vtysh)</option></select></Field>
             <Field label="Snapshot before every deploy" hint="Automatic safety snapshot of configs and topology.">
               <input type="checkbox" checked={s.snapshots.auto_before_deploy} onChange={(e) => upd("snapshots", "auto_before_deploy", e.target.checked)} /></Field>
             <Field label="Keep automatic snapshots" hint="Older automatic snapshots are pruned per lab; your named snapshots are never pruned.">
@@ -49,6 +55,14 @@ export default function Settings({ onClose, notify, labs, lab, appearance, onSav
           {tab === "defaults" && (<>
             <h3>Lab defaults</h3>
             <p className="hint">Used for new devices and new labs. Existing labs keep what they were built with until you change them.</p>
+            <Field label="New router model" hint="Hardware for routers you add from the palette. Existing devices keep theirs.">
+              <select value={s.lab_defaults.router_model || ""} onChange={(e) => upd("lab_defaults", "router_model", e.target.value)}>
+                <option value="">Generic (ports added as you cable)</option>
+                {Object.entries(catalogue()?.chassis || {}).filter(([, c]) => c.type === "router").map(([id, c]) => <option key={id} value={id}>{c.label}</option>)}</select></Field>
+            <Field label="New switch model">
+              <select value={s.lab_defaults.switch_model || ""} onChange={(e) => upd("lab_defaults", "switch_model", e.target.value)}>
+                <option value="">Generic (ports added as you cable)</option>
+                {Object.entries(catalogue()?.chassis || {}).filter(([, c]) => c.type === "switch").map(([id, c]) => <option key={id} value={id}>{c.label}</option>)}</select></Field>
             <Field label="Router image"><input className="wide" value={s.lab_defaults.frr_image} onChange={(e) => upd("lab_defaults", "frr_image", e.target.value)} /></Field>
             <Field label="PC image"><input className="wide" value={s.lab_defaults.pc_image} onChange={(e) => upd("lab_defaults", "pc_image", e.target.value)} /></Field>
             <Field label="Switch / server base"><input className="wide" value={s.lab_defaults.alpine_image} onChange={(e) => upd("lab_defaults", "alpine_image", e.target.value)} /></Field>

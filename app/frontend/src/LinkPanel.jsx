@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "./api.js";
+import { labIf, portsOf, nodeById, fmtSpeed } from "./hw.js";
 import { Icon, Sparkline, fmtBps } from "./ui.jsx";
 import { impairText } from "./canvas.jsx";
 
@@ -47,7 +48,7 @@ export default function LinkPanel({ lab, link, deployed, rate, hist, presets, on
 
   return (
     <div className="linkpanel" role="dialog" aria-label="Link">
-      <header><Icon name="link" /><h3>{link.a} <span className="hint">{link.a_if}</span> ↔ {link.b} <span className="hint">{link.b_if}</span></h3>
+      <header><Icon name="link" /><h3>{link.a} <span className="hint">{labIf(lab, link.a, link.a_if)}</span> ↔ {link.b} <span className="hint">{labIf(lab, link.b, link.b_if)}</span></h3>
         <button className="icon-btn" onClick={onClose} aria-label="Close"><Icon name="x" /></button></header>
 
       <div className="lp-live">
@@ -58,8 +59,9 @@ export default function LinkPanel({ lab, link, deployed, rate, hist, presets, on
 
       <section>
         <h4>Cable</h4>
-        <div className="row"><label>{link.a} port <input className="narrow" value={link.a_if} disabled={deployed} onChange={(e) => onEdit("a_if", e.target.value)} /></label>
-          <label>{link.b} port <input className="narrow" value={link.b_if} disabled={deployed} onChange={(e) => onEdit("b_if", e.target.value)} /></label></div>
+        <div className="row"><label>{link.a} port <input className="narrow" value={link.a_if} disabled={deployed || !!portsOf(nodeById(lab, link.a))} onChange={(e) => onEdit("a_if", e.target.value)} title={labIf(lab, link.a, link.a_if)} /></label>
+          <label>{link.b} port <input className="narrow" value={link.b_if} disabled={deployed || !!portsOf(nodeById(lab, link.b))} onChange={(e) => onEdit("b_if", e.target.value)} title={labIf(lab, link.b, link.b_if)} /></label></div>
+        {(portsOf(nodeById(lab, link.a)) || portsOf(nodeById(lab, link.b))) && <p className="hint">Ports on modular devices are chosen when you plug the cable in. Re-cable to move it. Link speed: {fmtSpeed(Math.min(...[link.a, link.b].map((id, i) => (portsOf(nodeById(lab, id)) || []).find((p) => p.if === (i ? link.b_if : link.a_if))?.kbit || Infinity)))}</p>}
         <div className="row"><div className="seg">{["copper", "fibre"].map((m) => <button key={m} className={link.media === m ? "on" : ""} onClick={() => onEdit("media", m)}>{m === "copper" ? "Copper" : "Fibre"}</button>)}</div>
           <button className="link danger" onClick={onDelete}><Icon name="trash" size={14} /> Delete cable</button></div>
         {deployed && <p className="hint">Port changes apply on the next deploy.</p>}

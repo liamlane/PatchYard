@@ -8,7 +8,7 @@ when it clears. Labs get a grace period after they first come up, so convergence
 deploy doesn't page you. History lives in SQLite next to the metrics.
 """
 import asyncio, collections, logging, re, sqlite3, time
-from . import settings, metrics, netinfo, labs, monitor
+from . import settings, metrics, netinfo, labs, monitor, hardware
 from .util import run
 
 log = logging.getLogger("netlab.alerts")
@@ -72,7 +72,7 @@ def conditions(ctrs, deployed) -> list[tuple]:
             t, rid = r["type"], r["id"]
             if t == "container_down" and settled:
                 for n in lab["nodes"]:
-                    if n["id"] in bridges or not _in_scope(r, name, n["id"]):
+                    if n["id"] in bridges or not _in_scope(r, name, n["id"]) or (n.get("props") or {}).get("power") == "off":
                         continue
                     c = ctrs.get((name, n["id"]))
                     if not c or c["state"] != "running":
@@ -84,8 +84,11 @@ def conditions(ctrs, deployed) -> list[tuple]:
                     sa = live.get(l["a"], {}).get("ifaces", {}).get(l["a_if"], {}).get("state")
                     sb = live.get(l["b"], {}).get("ifaces", {}).get(l["b_if"], {}).get("state")
                     if "down" in (sa, sb) or "lowerlayerdown" in (sa, sb):
-                        out.append((f"{rid}|{name}|{l['id']}", r, name, l["a"], f"{l['a']} {l['a_if']} ↔ {l['b']} {l['b_if']}",
-                                    f"link {l['a']} {l['a_if']} ↔ {l['b']} {l['b_if']} is down"))
+                        nd = {n["id"]: n for n in lab["nodes"]}
+                        ia = hardware.display(nd[l["a"]], l["a_if"]) if l["a"] in nd else l["a_if"]
+                        ib = hardware.display(nd[l["b"]], l["b_if"]) if l["b"] in nd else l["b_if"]
+                        out.append((f"{rid}|{name}|{l['id']}", r, name, l["a"], f"{l['a']} {ia} ↔ {l['b']} {ib}",
+                                    f"link {l['a']} {ia} ↔ {l['b']} {ib} is down"))
             elif t in ("cpu_high", "mem_high"):
                 for node, v in live.items():
                     if not _in_scope(r, name, node):

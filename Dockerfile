@@ -21,7 +21,7 @@ ENV DEBIAN_FRONTEND=noninteractive PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 \
 
 # host-side tools: ip/tc/bridge, iptables, tcpdump, nsenter, modprobe, iperf3, ping
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      iproute2 iptables tcpdump util-linux kmod iperf3 iputils-ping curl ca-certificates procps openssh-client \
+      iproute2 iptables tcpdump util-linux kmod iperf3 iputils-ping traceroute curl ca-certificates procps openssh-client \
  && rm -rf /var/lib/apt/lists/*
 
 # Docker CLI (talks to the host daemon through the mounted socket) and containerlab, pinned

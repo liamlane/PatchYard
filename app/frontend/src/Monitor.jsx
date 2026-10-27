@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { api } from "./api.js";
+import { ifLabel } from "./hw.js";
 import { Modal, Sparkline, TimeChart, Gauge, StateChip, fmtBps, fmtBytes, fmtNum, fmtAgo, useInterval, Icon } from "./ui.jsx";
 
 const RANGES = [["15m", 900], ["1h", 3600], ["6h", 21600], ["24h", 86400], ["48h", 172800]];
@@ -87,7 +88,7 @@ export default function MonitorTab({ lab, node, running }) {
           <thead><tr><th>Port</th><th>State</th><th>In</th><th>Out</th><th>Packets in/out</th><th>Drops</th><th>Errors</th><th>15 min</th></tr></thead>
           <tbody>{ifs.map(([n, i]) => (
             <tr key={n} className={`clickable ${n === "eth0" ? "dim" : ""}`} onClick={() => setChart({ iface: n })} title="Open history">
-              <td className="mono">{n}{n === "eth0" && <span className="hint"> mgmt</span>}</td>
+              <td className="mono" title={n}>{n === "eth0" ? n : ifLabel(node, n)}{n === "eth0" && <span className="hint"> mgmt</span>}</td>
               <td><span className={`led led-${i.state === "up" ? "up" : i.state === "unknown" ? "warn" : "down"}`} />{i.state}</td>
               <td className="mono">{fmtBps(i.rx_bps)}</td><td className="mono">{fmtBps(i.tx_bps)}</td>
               <td className="mono">{fmtNum(i.rx_pps)} / {fmtNum(i.tx_pps)}</td>

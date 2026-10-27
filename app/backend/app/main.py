@@ -1,11 +1,11 @@
 """netlab API + static web UI."""
-import asyncio, logging, os
+import asyncio, logging, os, re
 from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, WebSocket, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
-from . import labs, devices, metrics, monitor, impair, labmgmt, templates, settings, alerts, live, traffic, auth
+from . import labs, devices, metrics, monitor, impair, labmgmt, templates, settings, alerts, live, traffic, auth, hardware, reach
 from .version import VERSION, COMMIT
 from .capture import capture_for
 from .console import console
@@ -38,7 +38,7 @@ async def _fe(_: Request, e: FileExistsError):
 
 @asynccontextmanager
 async def lifespan(_app):
-    for m in ("mpls_router", "mpls_iptunnel", "vrf", "8021q", "bridge", "sch_netem"):
+    for m in ("mpls_router", "mpls_iptunnel", "vrf", "8021q", "bridge", "sch_netem", "dummy"):
         await run("modprobe", m)
     tasks = []
     if os.environ.get("NETLAB_METRICS", "1") != "0":
@@ -88,8 +88,16 @@ async def api_put(lab: str, body: dict):
     for k in ("workdir", "imported_from", "raw_kinds", "mgmt_network", "mgmt_subnet", "template", "cloned_from"):
         if k in old:
             body[k] = old[k]
+    # props changed on the server (IOS CLI, power) after the copy the browser edited win
+    seen = int(body.pop("_rev", 0) or 0)
+    newer = {n for (l, n), r in labs.NODE_REV.items() if l == lab and r > seen}
+    if newer:
+        oldp = {n["id"]: n.get("props", {}) for n in old["nodes"]}
+        for n in body.get("nodes", []):
+            if n["id"] in newer and n["id"] in oldp:
+                n["props"] = oldp[n["id"]]
     labs.save(body)
-    return {"ok": True}
+    return {"ok": True, **labs.rev_info(lab)}
 
 
 @app.delete("/api/labs/{lab}")
@@ -111,6 +119,10 @@ async def api_deploy(lab: str):
             labmgmt.snapshot(d, "auto: before deploy", auto=True)
             labmgmt.prune_auto(lab, int(settings.get("snapshots.keep_auto", 20)))
         alerts.LAB_SEEN.pop(lab, None)          # restart the alert grace period
+        for n in d["nodes"]:                    # a deploy powers everything on
+            if (n.get("props") or {}).get("power"):
+                labs.patch_props(lab, n["id"], lambda pr: pr.pop("power", None))
+        d = labs.load(lab)
         p = labs.generate(d)
         for br in labs.bridges(d):
             rc, _, _ = await run("ip", "link", "show", br)
@@ -138,6 +150,9 @@ async def api_destroy(lab: str):
             labs.generate(d)
         rc, out, err = await run("containerlab", "destroy", "-t", str(p), "--cleanup",
                                  cwd=str(labs.workdir(d)), timeout=600)
+        for n in d["nodes"]:                    # nothing is "powered off" in a destroyed lab
+            if (n.get("props") or {}).get("power"):
+                labs.patch_props(lab, n["id"], lambda pr: pr.pop("power", None))
         return {"ok": rc == 0, "saved_configs": saved["saved"], "save_failed": saved["failed"], "output": (out + err)[-8000:]}
 
 
@@ -146,6 +161,8 @@ async def api_status(lab: str):
     d = labs.load(lab)
     st = await devices.link_status_fast(d)
     st["capturing"] = capture_for(lab).running
+    st["power_off"] = [n["id"] for n in d["nodes"] if (n.get("props") or {}).get("power") == "off"]
+    st.update(labs.rev_info(lab))
     return st
 
 
@@ -242,6 +259,8 @@ async def api_subif(lab: str, node: str, body: dict):
     if n["type"] != "router" or n.get("raw"):
         raise HTTPException(400, "subinterfaces are only available on netlab routers")
     parent, vlan, add = body["parent"], labs.vlan_id(body["vlan"]), body.get("action", "add") == "add"
+    hit = next((s for s in n.setdefault("props", {}).get("subifs", []) if s["parent"] == parent and int(s["vlan"]) == vlan), None)
+    name = labs.subif_name(hit or {"parent": parent, "vlan": vlan})
     subs = [s for s in n.setdefault("props", {}).get("subifs", []) if not (s["parent"] == parent and int(s["vlan"]) == vlan)]
     if add:
         subs.append({"parent": parent, "vlan": vlan})
@@ -250,7 +269,7 @@ async def api_subif(lab: str, node: str, body: dict):
     labs.save(d)
     if (await container_states(lab)).get(node) != "running":
         return {"ok": True, "output": "Saved. Created at the next deploy."}
-    return await devices.subif(lab, node, parent, vlan, add)
+    return await devices.subif(lab, node, parent, vlan, add, name)
 
 
 @app.post("/api/labs/{lab}/nodes/{node}/browse")
@@ -265,6 +284,9 @@ async def api_ping(lab: str, node: str, body: dict):
 
 @app.websocket("/ws/console/{lab}/{node}")
 async def ws_console(ws: WebSocket, lab: str, node: str, mode: str = "sh"):
+    if mode == "ios":
+        from . import ios
+        return await ios.serve(ws, lab, node)
     await console(ws, lab, node, mode)
 
 
@@ -551,6 +573,46 @@ async def api_alert_ack(body: dict):
 @app.delete("/api/alerts/resolved")
 async def api_alert_clear():
     return {"deleted": await asyncio.to_thread(alerts.clear_resolved)}
+
+
+@app.post("/api/labs/{lab}/nodes/{node}/rename-files")
+async def api_rename_files(lab: str, node: str, body: dict):
+    """A renamed device keeps its saved config: move configs/<old> to configs/<new>."""
+    d = labs.load(lab)
+    old, new = check_name(node), check_name(body.get("to", ""))
+    if (await container_states(lab)).get(old) or (await container_states(lab)).get(new):
+        raise HTTPException(409, "destroy the lab before renaming devices")
+    src, dst = labs.workdir(d) / "configs" / old, labs.workdir(d) / "configs" / new
+    if not src.is_dir():
+        return {"ok": True, "moved": False}
+    if dst.exists():
+        raise HTTPException(409, f"configs/{new} already exists")
+    src.rename(dst)
+    f = dst / "frr.conf"
+    if f.exists():
+        f.write_text(re.sub(rf"^hostname {re.escape(old)}$", f"hostname {new}", f.read_text(), flags=re.M))
+    return {"ok": True, "moved": True}
+
+
+@app.post("/api/labs/{lab}/reachability")
+async def api_reachability(lab: str):
+    return await reach.check(labs.load(lab))
+
+
+# ---------------- hardware ----------------
+@app.get("/api/hardware")
+async def api_hardware():
+    return hardware.catalogue()
+
+
+@app.post("/api/labs/{lab}/nodes/{node}/power")
+async def api_power(lab: str, node: str, body: dict):
+    async with lock(lab):
+        d = labs.load(lab)
+        node_of(d, node)
+        if not await container_states(lab):
+            raise HTTPException(400, "deploy the lab first")
+        return await live.power(d, check_name(node), bool(body.get("on")))
 
 
 # ---------------- live editing ----------------

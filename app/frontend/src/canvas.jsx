@@ -10,7 +10,7 @@ export function DeviceNode({ data, selected }) {
   const cls = ["dev", selected && "dev-sel", data.cablePick && "dev-pick", `dev-${data.state || "off"}`, data.hit && "dev-hit", data.alert && `dev-al dev-al-${data.alert}`].filter(Boolean).join(" ");
   const cpu = data.cpu;
   return (
-    <div className={cls} title={`${data.label} (${data.state || "not deployed"})`}>
+    <div className={cls} title={`${data.label} (${data.state === "poweroff" ? "powered off" : data.state || "not deployed"})`}>
       <Handle type="target" position={Position.Top} style={hidden} isConnectable={false} />
       <Handle type="source" position={Position.Top} style={hidden} isConnectable={false} />
       {data.overlay && cpu != null && (
@@ -61,7 +61,7 @@ export function CableEdge({ id, sourceX: x1, sourceY: y1, targetX: x2, targetY: 
   const sourceX = x1 + (dx / len) * r, sourceY = y1 + (dy / len) * r;
   const targetX = x2 - (dx / len) * r, targetY = y2 - (dy / len) * r;
   const [path, lx, ly] = getStraightPath({ sourceX, sourceY, targetX, targetY });
-  const fibre = data?.media === "fibre";
+  const fibre = data?.media === "fibre", serial = data?.media === "serial";
   const k = 0.14;
   const ax = sourceX + (targetX - sourceX) * k, ay = sourceY + (targetY - sourceY) * k;
   const bx = targetX + (sourceX - targetX) * k, by = targetY + (sourceY - targetY) * k;
@@ -80,8 +80,8 @@ export function CableEdge({ id, sourceX: x1, sourceY: y1, targetX: x2, targetY: 
       {selected && <path d={path} className="cable-sel" />}
       {im && !down && <path d={path} className="cable-imp-glow" />}
       <BaseEdge id={id} path={path} style={{
-        stroke: down ? "var(--bad)" : tc || (fibre ? "var(--fibre)" : "var(--copper)"), strokeWidth: width,
-        strokeDasharray: down ? "4 6" : fibre && !tc ? "10 4" : undefined, transition: "stroke-width .6s, stroke .6s",
+        stroke: down ? "var(--bad)" : tc || (fibre ? "var(--fibre)" : serial ? "var(--serial)" : "var(--copper)"), strokeWidth: width,
+        strokeDasharray: down ? "4 6" : fibre && !tc ? "10 4" : serial && !tc ? "2 3" : undefined, transition: "stroke-width .6s, stroke .6s",
       }} />
       {data?.overlay && tc && !down && (
         <path d={flowDir === "fwd" ? path : rev} className="cable-flow" style={{ animationDuration: `${flowSpeed}s` }} />

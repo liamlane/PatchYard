@@ -1,7 +1,8 @@
 # Roadmap
 
-## Next
-- **IOS-syntax CLI (Step 5c)**: translate common IOS commands (`show ip int brief`, `conf t`, `router ospf 1` with wildcard masks, `ip route`, `interface Gi0/1` aliases) to FRR, with `?` help and tab completion; unknown commands pass through to vtysh.
+## Next (0.11.0)
+- **New device types**: Open vSwitch switches (RSTP/MSTP, LACP, SPAN), VyOS router/firewall (NAT, VPN, policy routing), nftables firewall with a zone/rule form, extra servers (RADIUS, TACACS+, syslog, NTP, SNMP, TFTP).
+- IOS CLI: VRF definition/forwarding, packet ACLs and NAT once the device types above provide them; `--More--` paging.
 - **External notifications**: email (SMTP), phone push via ntfy, Teams/Slack webhooks, per-rule routing and quiet hours.
 - **Verify the 1-hour history check** on the VM (deferred from rev 7 testing).
 
@@ -14,8 +15,8 @@
 - Scheduled snapshots; include `/opt/netlab` in the Restic backup.
 - Publish through NPM + Authentik; in-app "update available" check against GHCR.
 - Self-test script: deploy a template, run checks, report pass/fail (for verifying each release on the VM).
-- RSTP/MSTP via Open vSwitch or mstpd (kernel bridge is 802.1D only).
-- Renaming a device carries its saved config folder.
+- Templates built on chassis models (current templates use generic devices).
+- SR Linux / Arista cEOS device types; VM-based images if nested virtualisation is enabled on PV2.
 - Per-hop Simulation stepping (hold packets at each device like Packet Tracer).
 
 ## Done
@@ -28,3 +29,4 @@
 - Lab management: templates, snapshots/diff/restore, clone, export/import.
 - Alerting with notifications centre; global Settings; live add/remove without redeploy; traffic generator; optional login.
 - Container image + GitHub Actions publishing to GHCR.
+- 0.10.0: hardware models with modules, port types/speeds, power on/off, IOS-syntax CLI, lab delete in the manager.

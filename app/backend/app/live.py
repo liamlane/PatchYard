@@ -11,7 +11,7 @@ redeploy produces the same result.
 """
 import secrets, shlex
 from pathlib import Path
-from . import labs, netinfo, settings, devices
+from . import labs, netinfo, settings, devices, hardware, impair
 from .util import run, dsh, cname, check_if
 
 
@@ -77,7 +77,7 @@ async def _post_link_hook(labd, node_id, ifn):
         cmds = [f"[ -e /proc/sys/net/mpls/conf/{ifn}/input ] && echo 1 > /proc/sys/net/mpls/conf/{ifn}/input"]
         for si in p.get("subifs", []) or []:
             if si["parent"] == ifn:
-                name = f"{ifn}.{si['vlan']}"
+                name = labs.subif_name(si)
                 cmds.append(f"ip link show {name} >/dev/null 2>&1 || ip link add link {ifn} name {name} type vlan id {int(si['vlan'])}; ip link set {name} up")
         await dsh(lab, node_id, "; ".join(cmds) + "; true")
         return f"{node_id}: {ifn} up (FRR picks it up automatically)"
@@ -131,13 +131,18 @@ async def add_link(labd: dict, link: dict) -> dict:
     except RuntimeError as ex:
         await run("ip", "link", "del", tmp["a"])
         return {"ok": False, "output": str(ex)}
-    log.append(f"wired {link['a']} {link['a_if']} ↔ {link['b']} {link['b_if']}")
+    nodes = {n["id"]: n for n in labd["nodes"]}
+    lbl = lambda s: hardware.display(nodes[link[s]], link[f"{s}_if"]) if link[s] in nodes else link[f"{s}_if"]
+    log.append(f"wired {link['a']} {lbl('a')} ↔ {link['b']} {lbl('b')}")
     for e in ends:
         if not e["bridge"]:
             h = await _post_link_hook(labd, e["node"], e["if"])
             if h:
                 log.append(h)
-    return {"ok": True, "output": "\n".join(log)}
+    if link.get("impair") or hardware.link_kbit(labd, link):
+        r = await impair.apply(labd, link, link.get("impair"))
+        log.append(r["output"].splitlines()[0] if r["output"] else "")
+    return {"ok": True, "output": "\n".join(x for x in log if x)}
 
 
 async def remove_link(labd: dict, a: str, a_if: str, b: str, b_if: str) -> dict:
@@ -155,3 +160,43 @@ async def remove_link(labd: dict, a: str, a_if: str, b: str, b_if: str) -> dict:
         if rc == 0 or "Cannot find device" in e:
             return {"ok": True, "output": f"removed {a} {a_if} ↔ {b} {b_if}"}
     return {"ok": True, "output": "already gone"}
+
+
+async def power(labd: dict, node_id: str, on: bool) -> dict:
+    """Power a device off or on inside a running lab, like the switch on the back of a box.
+
+    Off removes the container: running config that wasn't saved (write memory / Save
+    configs) is lost, as on real hardware. On starts it again from the lab file and
+    re-plugs every cable whose other end is up, then re-applies link speed, impairments
+    and admin-down state."""
+    node = next((n for n in labd["nodes"] if n["id"] == node_id), None)
+    if not node:
+        raise ValueError(f"{node_id} not in lab")
+    if node.get("raw"):
+        raise ValueError("imported devices can't be power-cycled; redeploy the lab")
+    if not on:
+        r = await remove_node(labd["name"], node_id)
+        labs.patch_props(labd["name"], node_id, lambda p: p.__setitem__("power", "off"))
+        return {"ok": r["ok"], "output": f"{node_id} powered off" if r["ok"] else r["output"]}
+    labs.patch_props(labd["name"], node_id, lambda p: p.pop("power", None))
+    labd = labs.load(labd["name"])
+    r = await add_node(labd, node_id)
+    if not r["ok"]:
+        return r
+    log = [f"{node_id} powered on"]
+    ctrs = await netinfo.containers()
+    bridges = _bridge_ids(labd)
+    for l in labd["links"]:
+        if node_id not in (l["a"], l["b"]):
+            continue
+        other = l["b"] if l["a"] == node_id else l["a"]
+        oc = ctrs.get((labd["name"], other))
+        if other not in bridges and (not oc or oc["state"] != "running"):
+            log.append(f"{other} is off: cable to it stays unplugged")
+            continue
+        x = await add_link(labd, l)
+        if not x["ok"]:
+            log.append(f"cable to {other}: {x['output']}")
+        elif l.get("admin") == "down":
+            await impair.set_state(labd, l, False)
+    return {"ok": True, "output": "\n".join(log)}

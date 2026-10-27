@@ -9,12 +9,13 @@ Personal tool. Runs on FLT-NETLAB-01 (Ubuntu 24.04 VM on Proxmox PV2).
 ## What it does
 
 - **Build** topologies by drag and drop: routers, switches, PCs and servers, joined by copper or fibre cables. You can add notes and coloured areas, then align and snap them. Undo/redo, a command palette (Ctrl+K) and dark mode are included.
-- **Configure** each device through Packet Tracer-style forms that show the equivalent commands, or open the CLI tab for FRR's `vtysh` (`write memory` works).
+- **Configure** each device through Packet Tracer-style forms that show the equivalent commands, or in the CLI tab with **IOS syntax** (`conf t`, `int g0/0/0`, `router ospf 1`, `switchport mode trunk`, `?` help, Tab completion), FRR's `vtysh`, or a shell.
+- **Hardware**: pick a router or switch model, drag modules (GE copper, SFP, 10G SFP+, serial) into its slots, cable by port name (Gi0/0/0, Fa0/1), and power devices off and on. Cables must match the port, and links run at the port speed.
 - **Run** the lab with one click. containerlab starts the containers and wires the cables. Devices and cables you add to a running lab start and connect straight away, without a redeploy.
 - **Watch** live throughput, drops and errors per port, CPU and memory per device, and routing tables with OSPF/BGP/LDP state. History is kept for 48 hours, and a traffic overlay shows load on the cables.
 - **Alert** on a stopped device, a link down, BGP/OSPF/LDP sessions, CPU, memory, throughput, errors, or ping-probe loss/RTT. Alerts appear as toasts and a bell badge, with a history you can acknowledge.
 - **Break** links on purpose: up/down, flapping, or netem delay, jitter, loss, rate limits and corruption. Presets cover 4G, satellite, lossy Wi-Fi and a congested WAN.
-- **Test** with the iperf3 traffic generator between any two devices, and step through real packet captures in Simulation mode.
+- **Test** with the iperf3 traffic generator between any two devices, check every host can reach every other with the reachability matrix, and step through real packet captures in Simulation mode.
 - **Manage** labs from templates. Snapshots can be diffed and restored, and labs can be cloned or exported/imported as zip files. Global settings and an optional login are included.
 
 ## Screenshots
@@ -98,7 +99,7 @@ netlab runs privileged with the Docker socket, so anyone who can reach it contro
 
 | Path | What |
 | --- | --- |
-| `app/backend` | FastAPI app: `main` (routes), `labs`, `devices`, `live`, `metrics`, `alerts`, `monitor`, `impair`, `traffic`, `capture`, `labmgmt`, `templates`, `settings`, `auth` |
+| `app/backend` | FastAPI app: `main` (routes), `labs`, `devices`, `hardware` (models, modules, ports), `ios` (IOS-syntax CLI), `live`, `metrics`, `alerts`, `monitor`, `impair`, `traffic`, `capture`, `labmgmt`, `templates`, `settings`, `auth` |
 | `app/frontend` | React UI (Vite) |
 | `labs/` | The original Phase 1 and Phase 2 containerlab labs, with deploy/verify scripts and the Phase 2 generator |
 | `deploy/` | `docker-compose.yml`, `setup.sh`, `update.sh` |
