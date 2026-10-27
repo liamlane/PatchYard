@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { api } from "./api.js";
-import { catalogue, chassisOf, portsOf, usedPorts, fmtSpeed, ifLabel } from "./hw.js";
+import { catalogue, chassisOf, portsOf, usedPorts, fmtSpeed, ifLabel, mediaConflicts } from "./hw.js";
 
 // Rear-panel view of a chassis device: model, power, on-board ports, slots with
 // drag-in modules. Ports light up from live state; cables show who they go to.
@@ -8,7 +8,7 @@ export default function HardwarePanel({ lab, node, deployed, running, poweredOff
   const cat = catalogue();
   const [busy, setBusy] = useState(false);
   const [over, setOver] = useState(null);
-  if (!cat || node.raw || !["router", "switch"].includes(node.type)) return null;
+  if (!cat || node.raw || !["router", "switch", "firewall", "pc", "server"].includes(node.type)) return null;
   const ch = chassisOf(node);
   const ports = portsOf(node) || [];
   const used = usedPorts(lab, node.id);
@@ -27,6 +27,8 @@ export default function HardwarePanel({ lab, node, deployed, running, poweredOff
     const have = new Set((portsOf(next) || []).map((p) => p.if));
     const missing = [...used].filter((i) => !have.has(i));
     if (missing.length) return notify(`${c.label} has no port for ${missing.join(", ")}`, "Unplug those cables first, or pick a bigger model.", "bad");
+    const bad = mediaConflicts(lab, next);
+    if (bad.length) return notify("Cable type wouldn't match", bad.join("\n") + "\nRe-cable with the right cable, or fit a copper transceiver.", "bad");
     onUpdateNode(node.id, { chassis: id, modules: next.props.modules });
     notify(`${node.id} is now a ${c.label}`, used.size ? "Existing cables keep their ports (eth1 is the first on-board port)." : null, "ok");
   };
@@ -39,7 +41,20 @@ export default function HardwarePanel({ lab, node, deployed, running, poweredOff
     }
     const mods = { ...cur, [slotId]: mid || undefined };
     if (!mid) delete mods[slotId];
+    const next = { ...node, props: { ...node.props, modules: mods } };
+    const have = new Set((portsOf(next) || []).map((p) => p.if));
+    const lost = ports.filter((p) => used.has(p.if) && !have.has(p.if));
+    if (lost.length) return notify(`Unplug ${lost.map((p) => p.name).join(", ")} first`, null, "bad");
+    const bad = mediaConflicts(lab, next);
+    if (bad.length) return notify("Cable type wouldn't match", bad.join("\n") + "\nRe-cable with the right cable first.", "bad");
     onUpdateNode(node.id, { modules: mods });
+  };
+  const setSfp = (ifn, kind) => {
+    const sfp = { ...(node.props?.sfp || {}), [ifn]: kind };
+    if (kind === "fibre") delete sfp[ifn];
+    const bad = mediaConflicts(lab, { ...node, props: { ...node.props, sfp } });
+    if (bad.length) return notify("Cable type wouldn't match", bad.join("\n") + "\nUnplug or re-cable first.", "bad");
+    onUpdateNode(node.id, { sfp });
   };
   const power = async (on) => {
     if (!on && !confirm(`Power ${node.id} off?\n\nAnything not saved (write memory / Save running configs) is lost, like on a real device.`)) return;
@@ -124,6 +139,15 @@ export default function HardwarePanel({ lab, node, deployed, running, poweredOff
             </div>
           )}
         </div>
+      )}
+      {ports.some((p) => p.sfp) && (
+        <details className="sfp-box" open={Object.keys(node.props?.sfp || {}).length > 0}>
+          <summary>Transceivers <span className="hint">SFP/SFP+ ports take fibre optics by default; fit a copper SFP (RJ45) to plug copper devices in.</span></summary>
+          <div className="sfp-grid">{ports.filter((p) => p.sfp).map((p) => (
+            <label key={p.if} className="row"><span className="mono">{p.name}</span>
+              <select value={p.sfp} onChange={(e) => setSfp(p.if, e.target.value)}>{Object.entries(cat.transceivers || { fibre: "fibre", copper: "copper" }).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select>
+              {peer[p.if] && <span className="hint">to {peer[p.if]}</span>}</label>))}</div>
+        </details>
       )}
       {ch && (
         <p className="hint hw-legend">

@@ -148,9 +148,9 @@ def _consume(ptype: str, toks: list[str], i: int):
     if ptype == "IF":
         if i + 1 < len(toks) and re.fullmatch(r"[A-Za-z-]+", t) and toks[i + 1][:1].isdigit():
             v = t + toks[i + 1]
-            if hardware.parse_ifname(v):
+            if hardware.parse_ifname(v) or _PO.fullmatch(v):
                 return 2, v
-        if hardware.parse_ifname(t) or t.lower() == "null0":
+        if hardware.parse_ifname(t) or t.lower() == "null0" or _PO.fullmatch(t):
             return 1, t
         return 0, None
     if ptype in ("A.B.C.D", "MASK", "WILD", "HOST"):
@@ -167,6 +167,9 @@ def _consume(ptype: str, toks: list[str], i: int):
             return 1, int(t)
         return 0, None
     return 0, None
+
+
+_PO = re.compile(r"(?i)po(?:rt-channel)?(\d+)")
 
 
 def match(g: Grammar, toks: list[str]):
@@ -398,14 +401,23 @@ class Session:
     def ifname(self, ifn: str) -> str:
         if ifn == "eth0":
             return "Management0"
+        if re.fullmatch(r"po\d+", ifn):
+            return f"Port-channel{ifn[2:]}"
         return hardware.display(self.node, ifn, long=True)
 
     def short(self, ifn: str) -> str:
+        if re.fullmatch(r"po\d+", ifn):
+            return f"Po{ifn[2:]}"
         return hardware.display(self.node, ifn)
 
     def resolve(self, text: str) -> str:
         if text.lower() == "null0":
             return "Null0"
+        m = _PO.fullmatch(text.replace(" ", ""))
+        if m:
+            if self.kind != "switch" or self.props.get("engine") != "ovs":
+                raise CmdError("% netlab: port-channels need a switch on the Open vSwitch engine (Config → Global)")
+            return f"po{int(m.group(1))}"
         try:
             return hardware.resolve(self.node, text)
         except ValueError as e:
@@ -604,13 +616,16 @@ class Session:
         return None
 
     # ---- main loop
-    async def run(self):
+    async def init_host(self):
         if self.kind == "router":
             rc, out = await self.env.io.vtysh("show running-config")
             m = re.search(r"^hostname (\S+)", out, re.M)
             self.host = self.ios_props().get("hostname") or (m.group(1) if m else self.env.node_id)
         else:
             self.host = self.props.get("hostname") or self.env.node_id
+
+    async def run(self):
+        await self.init_host()
         await self.w("\nPress RETURN to get started.\n")
         while True:
             await self.readline("", echo=False, help_ok=False)
@@ -658,7 +673,15 @@ class Session:
             self.q.put_nowait(ch)
 
     def to_priv(self):
+        if self.mode != "exec":
+            self.event("SYS-5-CONFIG_I", "Configured from console by console")
         self.mode, self.ctx, self.data = "exec", [], {}
+
+    def event(self, code: str, msg: str):
+        """Send an IOS-style syslog message to every 'logging host' (UDP 514, from the device)."""
+        hosts = self.ios_props().get("logging_hosts") or []
+        for h in hosts:
+            asyncio.ensure_future(self.env.io.ns("logger", "--rfc3164", "-n", h, "-P", "514", "-d", "-t", f"{self.host}: %{code}", msg, timeout=5))
 
     # ---- dispatch
     PIPES = ("include", "exclude", "begin", "section", "count")
@@ -1007,6 +1030,104 @@ def accepted(prefix):
     return h
 
 
+async def h_logging_host(s, a, neg):
+    h = str(a[0])
+    def fn(p):
+        ios = dict(p.get("ios") or {})
+        hosts = [x for x in ios.get("logging_hosts", []) if x != h]
+        if not neg:
+            hosts.append(h)
+        ios["logging_hosts"] = hosts[:8]
+        p["ios"] = ios
+    s.patch(fn)
+
+
+async def _config_text(s, which: str) -> str:
+    if s.kind == "switch":
+        return switch_config(s)
+    if which == "startup":
+        rc, out, err = await s.env.io.sh("cat /etc/frr/frr.conf")
+        return ios_config(s, out)
+    rc, body = await s.env.io.vtysh("show running-config")
+    return ios_config(s, body)
+
+
+def _tftp_url(text: str):
+    m = re.fullmatch(r"tftp:(?://([^/]+)/?(.*))?", text)
+    return (m.group(1) or "", m.group(2) or "") if m else None
+
+
+async def h_copy(s, a, neg):
+    """copy running-config|startup-config tftp:[//host/file]  and  copy tftp:[//host/file] running-config"""
+    import os, tempfile
+    src, dst = str(a[0]), str(a[1])
+    is_cfg = lambda x, name: len(x) >= 3 and name.startswith(x.lower())
+    if is_cfg(src, "running-config") and is_cfg(dst, "startup-config"):
+        return await (r_copy_rs(s, a, neg) if s.kind == "router" else sw_write(s, a, neg))
+    up = _tftp_url(dst.lower()) if (is_cfg(src, "running-config") or is_cfg(src, "startup-config")) else None
+    down = _tftp_url(src.lower()) if is_cfg(dst, "running-config") else None
+    if up is None and down is None:
+        raise CmdError("% netlab: supported: copy running-config|startup-config tftp:, copy tftp: running-config, copy running-config startup-config")
+    host, fname = up if up is not None else down
+    if not host:
+        host = (await s.readline("Address or name of remote host []? ", help_ok=False)).strip()
+    if not is_ip(host):
+        raise CmdError("% Error parsing filename (Invalid IP address)")
+    default = f"{s.host.lower()}-confg"
+    if up is not None:
+        if not fname:
+            fname = (await s.readline(f"Destination filename [{default}]? ", help_ok=False)).strip() or default
+        text = await _config_text(s, "startup" if is_cfg(src, "startup-config") else "running")
+        fd, path = tempfile.mkstemp(prefix="netlab-tftp-")
+        with os.fdopen(fd, "w") as f:
+            f.write(text)
+        t0 = time.time()
+        try:
+            rc, out, err = await s.env.io.ns("tftp", "-m", "binary", host, "-c", "put", path, fname, timeout=30)
+        finally:
+            os.unlink(path)
+        if rc or "timed out" in (out + err) or "Error" in (out + err):
+            raise CmdError(f"%Error opening tftp://{host}/{fname} ({(out + err).strip() or 'Timed out'})")
+        return await s.say(f"!!\n{len(text)} bytes copied in {time.time() - t0:.3f} secs")
+    if not fname:
+        fname = (await s.readline("Source filename []? ", help_ok=False)).strip()
+    if not fname:
+        raise CmdError("% No source filename")
+    await s.readline("Destination filename [running-config]? ", help_ok=False)
+    await s.say(f"Accessing tftp://{host}/{fname}...")
+    fd, path = tempfile.mkstemp(prefix="netlab-tftp-"); os.close(fd)
+    try:
+        rc, out, err = await s.env.io.ns("tftp", "-m", "binary", host, "-c", "get", fname, path, timeout=30)
+        text = open(path).read() if rc == 0 else ""
+    finally:
+        os.unlink(path)
+    if rc or not text or "Error" in (out + err):
+        raise CmdError(f"%Error opening tftp://{host}/{fname} ({(out + err).strip() or 'No such file'})")
+    await s.say(f"Loading {fname} from {host}: !\n[OK - {len(text)} bytes]")
+    skip = re.compile(r"^(Building configuration|Current configuration|version |end$|enable secret 9 )")
+    s.mode, s.ctx, s.data = "config", [], {}
+    applied = 0
+    for ln in text.splitlines():
+        if not ln.strip() or ln.strip() == "!" or skip.match(ln.strip()):
+            continue
+        if not ln.startswith(" "):
+            s.mode, s.ctx, s.data = "config", [], {}
+        s.cur_line = ln.strip()
+        outer, s.capture = s.capture, []
+        try:
+            await s.dispatch_config(ln.split(), ln.strip())
+        except CmdError as e:
+            s.capture.append(str(e) + "\n")
+        finally:
+            reply, s.capture = "".join(s.capture), outer
+        if reply.strip():
+            await s.say(f"{ln.strip()}\n" + "\n".join(l for l in reply.splitlines() if not l.strip().startswith("^")))
+        applied += 1
+    s.mode, s.ctx, s.data = "exec", [], {}
+    s.event("SYS-5-CONFIG_I", f"Configured from tftp://{host}/{fname}")
+    await s.say(f"{len(text)} bytes copied, {applied} lines applied to running-config")
+
+
 async def h_enable_secret(s, a, neg):
     pw = str(a[-1]) if a else ""
     def fn(p):
@@ -1314,7 +1435,8 @@ async def r_ip_address(s, a, neg):
 
 
 async def r_shutdown(s, a, neg):
-    await s.frr_do("no shutdown" if neg else "shutdown")
+    if await s.frr_do("no shutdown" if neg else "shutdown"):
+        s.event("LINK-5-CHANGED", f"Interface {s.ifname(s.data.get('ifn', ''))}, changed state to {'up' if neg else 'administratively down'}")
 
 
 async def r_encap(s, a, neg):
@@ -1525,6 +1647,8 @@ async def sw_interface(s, a, neg):
         return
     if ifn.startswith("lo") or "." in ifn:
         raise CmdError("% netlab switches support physical ports and one management Vlan interface")
+    if ifn.startswith("po") and not any((c or {}).get("channel") == int(ifn[2:]) for c in (s.props.get("ports") or {}).values()):
+        await s.say(f"% netlab: Port-channel{ifn[2:]} has no members yet; add them with 'channel-group {ifn[2:]} mode active'")
     s.mode, s.data = "if", {"ifn": ifn}
 
 
@@ -1621,6 +1745,8 @@ async def sw_trunk_allowed(s, a, neg):
 
 async def sw_shutdown(s, a, neg):
     ifs = _sw_ifs(s)
+    for i in ifs:
+        s.event("LINK-5-CHANGED", f"Interface {s.ifname(i)}, changed state to {'up' if neg else 'administratively down'}")
     def fn(p):
         ports = dict(p.get("ports") or {})
         for i in ifs:
@@ -1738,9 +1864,74 @@ async def sw_stp_prio(s, a, neg):
 
 async def sw_stp_mode(s, a, neg):
     mode = str(a[0]).lower() if a else ""
+    ovs = s.props.get("engine") == "ovs"
     await sw_commit(s, lambda p: p.__setitem__("stp", not neg))
-    if mode and mode not in ("pvst",):
-        await s.say(f"% netlab: {mode} isn't available; netlab switches run 802.1D (kernel bridge). RSTP/MST are on the roadmap.")
+    if ovs and mode.startswith("mst"):
+        await s.say("% netlab: MST isn't available; this switch runs RSTP (one instance, Open vSwitch)")
+    elif ovs and mode not in ("rapid-pvst", "pvst", ""):
+        await s.say(f"% netlab: {mode} isn't available; running RSTP")
+    elif not ovs and mode and mode != "pvst":
+        await s.say(f"% netlab: {mode} needs the Open vSwitch engine (Config → Global → Switch engine); this switch runs 802.1D")
+
+
+async def sw_channel_group(s, a, neg):
+    if s.props.get("engine") != "ovs":
+        raise CmdError("% netlab: EtherChannel needs the Open vSwitch engine (Config → Global → Switch engine)")
+    ifs = _sw_ifs(s)
+    if any(i.startswith("po") for i in ifs):
+        raise CmdError("% channel-group goes on the member ports, not the port-channel")
+    if not neg and not a:
+        raise CmdError("% Incomplete command.")
+    n = int(a[0]) if a else 0
+    mode = str(a[1]).lower() if len(a) > 1 else "active"
+    if mode not in ("active", "passive", "on"):
+        raise CmdError("% netlab: modes are active, passive (LACP) or on (static)")
+    def fn(p):
+        ports = dict(p.get("ports") or {})
+        for i in ifs:
+            c = dict(ports.get(i) or {})
+            if neg:
+                c.pop("channel", None)
+            else:
+                c["channel"] = n
+            ports[i] = c
+        p["ports"] = ports
+        if not neg:
+            ch = dict(p.get("channels") or {}); ch[str(n)] = {"mode": mode}; p["channels"] = ch
+            if f"po{n}" not in ports:
+                p["ports"][f"po{n}"] = {"mode": ports[ifs[0]].get("mode", "access"), "vlan": ports[ifs[0]].get("vlan", 1)}
+    await sw_commit(s, fn)
+    if not neg:
+        await s.say(f"Creating a port-channel interface Port-channel {n}")
+
+
+async def sw_show_etherchannel(s, a, neg):
+    p = s.props
+    if p.get("engine") != "ovs":
+        return await s.say("% netlab: EtherChannel needs the Open vSwitch engine")
+    groups = {}
+    for i, c in (p.get("ports") or {}).items():
+        if (c or {}).get("channel"):
+            groups.setdefault(int(c["channel"]), []).append(i)
+    rc, out, _ = await s.env.io.sh("ovs-appctl bond/show 2>/dev/null")
+    live = {}
+    cur = None
+    for ln in out.splitlines():
+        m = re.match(r"---- po(\d+) ----", ln)
+        if m:
+            cur = int(m.group(1)); live[cur] = {}
+        m = re.match(r"member (\S+): (enabled|disabled)", ln.strip())
+        if m and cur is not None:
+            live[cur][m.group(1)] = m.group(2)
+    L = ["Flags:  D - down        P - bundled in port-channel", "        s - suspended   U - in use", "",
+         f"Number of channel-groups in use: {len(groups)}", "",
+         "Group  Port-channel  Protocol    Ports", "------+-------------+-----------+-----------------------------------------------"]
+    for n, ms in sorted(groups.items()):
+        mode = ((p.get("channels") or {}).get(str(n)) or {}).get("mode", "active")
+        flags = "".join(f"{s.short(m)}({'P' if live.get(n, {}).get(m) == 'enabled' else 'D'}) " for m in sorted(ms, key=lambda x: int(x[3:])))
+        L.append(f"{n:<7}Po{n}({'SU' if n in live else 'SD'}){'':<5}{'LACP' if mode != 'on' else '-':<12}{flags}")
+    await s.say("\n".join(L))
+
 
 
 async def sw_stp_off(s, a, neg):
@@ -1801,7 +1992,31 @@ async def sw_show_status(s, a, neg):
     await s.say("\n".join(lines))
 
 
+async def sw_show_mac_ovs(s):
+    rc, out, _ = await s.env.io.sh("ovs-vsctl --bare --columns=name,ofport list interface; echo ===; ovs-appctl fdb/show br0")
+    head, _, fdb = out.partition("===")
+    words = head.split()
+    ofp = {words[i + 1]: words[i] for i in range(0, len(words) - 1, 2)}
+    chan = {i: f"po{c['channel']}" for i, c in (s.props.get("ports") or {}).items() if (c or {}).get("channel")}
+    lines = ["          Mac Address Table", "-------------------------------------------", "",
+             f"{'Vlan':<8}{'Mac Address':<19}{'Type':<12}Ports", f"{'----':<8}{'-----------':<19}{'--------':<12}-----"]
+    n = 0
+    for ln in fdb.splitlines()[1:]:
+        f = ln.split()
+        if len(f) < 3 or f[0] == "LOCAL":
+            continue
+        mac = f[2].replace(":", "")
+        port = ofp.get(f[0], f[0])
+        port = chan.get(port, port)
+        lines.append(f"{f[1]:<8}{mac[0:4] + '.' + mac[4:8] + '.' + mac[8:12]:<19}{'DYNAMIC':<12}{s.short(port)}")
+        n += 1
+    lines.append(f"Total Mac Addresses for this criterion: {n}")
+    await s.say("\n".join(lines))
+
+
 async def sw_show_mac(s, a, neg):
+    if s.props.get("engine") == "ovs":
+        return await sw_show_mac_ovs(s)
     rc, out, _ = await s.env.io.ns("bridge", "-j", "fdb", "show", "br", "br0")
     try:
         rows = json.loads(out) if rc == 0 else []
@@ -1824,6 +2039,11 @@ async def sw_show_mac(s, a, neg):
 
 async def sw_show_stp(s, a, neg):
     p = s.props
+    if p.get("engine") == "ovs":
+        if not p.get("stp"):
+            return await s.say("No spanning tree instance exists.")
+        rc, out, _ = await s.env.io.sh("ovs-appctl rstp/show br0 2>&1")
+        return await s.say("VLAN0001  (netlab: Open vSwitch RSTP, one instance for all VLANs)\n  Spanning tree enabled protocol rstp\n\n" + s.tr_out(out))
     if not p.get("stp"):
         return await s.say("No spanning tree instance exists.")
     script = ("cd /sys/class/net/br0/bridge && echo $(cat root_id) $(cat bridge_id) $(cat root_port) $(cat root_path_cost) "
@@ -1944,7 +2164,7 @@ def ios_config(s, frr_text: str, iface=None) -> str:
         return "\n".join(blk + ["end"]) if blk else f"% Interface {want} has no configuration\n"
     ios = s.ios_props()
     head = ["!", "version FRRouting (shown through the netlab IOS CLI)", "!"]
-    extras = [x for x in ios.get("extra", [])]
+    extras = [x for x in ios.get("extra", [])] + [f"logging host {h}" for h in ios.get("logging_hosts", [])]
     if ios.get("enable_secret"):
         extras.append(f"enable secret 9 $nl${ios['enable_secret'][:22]}")
     body = text.splitlines()
@@ -1973,14 +2193,15 @@ def ios_config(s, frr_text: str, iface=None) -> str:
 def switch_config(s) -> str:
     p = s.props
     ios = s.ios_props()
-    L = ["Building configuration...", "", "Current configuration :", "!", "version netlab-switch (Linux bridge)", "!",
+    ovs = p.get("engine") == "ovs"
+    L = ["Building configuration...", "", "Current configuration :", "!", f"version netlab-switch ({'Open vSwitch' if ovs else 'Linux bridge'})", "!",
          f"hostname {s.host}", "!"]
-    L += ios.get("extra", [])
+    L += ios.get("extra", []) + [f"logging host {h}" for h in ios.get("logging_hosts", [])]
     if ios.get("enable_secret"):
         L.append(f"enable secret 9 $nl${ios['enable_secret'][:22]}")
     L.append("!")
     if p.get("stp"):
-        L.append("spanning-tree mode pvst   ! netlab: 802.1D, one instance")
+        L.append("spanning-tree mode rapid-pvst   ! netlab: RSTP, one instance" if ovs else "spanning-tree mode pvst   ! netlab: 802.1D, one instance")
         if int(p.get("stp_priority") or 32768) != 32768:
             L.append(f"spanning-tree vlan 1-4094 priority {p.get('stp_priority')}")
     else:
@@ -1991,10 +2212,15 @@ def switch_config(s) -> str:
             continue
         L += [f"vlan {v['id']}", f" name {v['name']}", "!"]
     ports = p.get("ports") or {}
-    allp = [x["if"] for x in hardware.ports(s.node) or []] or sorted(ports, key=lambda x: int(re.sub(r"\D", "", x) or 0))
-    for i in allp:
+    allp = [x["if"] for x in hardware.ports(s.node) or []] or sorted((x for x in ports if x.startswith("eth")), key=lambda x: int(re.sub(r"\D", "", x) or 0))
+    pos = sorted((x for x in ports if re.fullmatch(r"po\d+", x)), key=lambda x: int(x[2:])) if ovs else []
+    for i in pos + allp:
         c = ports.get(i) or {}
         L.append(f"interface {s.ifname(i)}")
+        if c.get("channel") and ovs:
+            mode = ((p.get("channels") or {}).get(str(c["channel"])) or {}).get("mode", "active")
+            L += [f" channel-group {c['channel']} mode {mode}"] + ([" shutdown"] if c.get("shutdown") else []) + ["!"]
+            continue
         if c.get("description"):
             L.append(f" description {c['description']}")
         if c.get("mode") == "trunk":
@@ -2051,6 +2277,7 @@ def _global_config(g, sw):
     g.add("enable secret LINE", h_enable_secret).add("enable password LINE", h_enable_secret)
     g.add("banner motd LINE", h_banner)
     g.add("line console <0-0>", h_line).add("line vty <0-15> <0-15>", h_line).add("line vty <0-15>", h_line).add("line aux <0-0>", h_line)
+    g.add("logging host A.B.C.D", h_logging_host).add("logging A.B.C.D", h_logging_host)
     for pre in ("service LINE", "logging LINE", "ntp LINE", "ip domain-lookup", "ip domain-name WORD", "ip domain lookup", "ip name-server LINE",
                 "username LINE", "ip ssh LINE", "crypto LINE", "cdp run", "lldp run", "snmp-server LINE", "clock timezone LINE", "ip cef",
                 "ip routing", "ipv6 unicast-routing", "mpls label protocol ldp", "vtp mode WORD", "vtp domain WORD", "errdisable LINE",
@@ -2086,6 +2313,7 @@ def router_grammars():
     pv.add("show mpls forwarding-table", passthrough_show("show mpls table")).add("show mpls ldp neighbor", passthrough_show("show mpls ldp neighbor"))
     pv.add("show ip protocols", passthrough_show("show ip ospf")).add("show ip vrf", passthrough_show("show vrf")).add("show vrf", passthrough_show("show vrf"))
     pv.add("write", r_write).add("write memory", r_write).add("copy running-config startup-config", r_copy_rs)
+    pv.add("copy WORD WORD", h_copy)
     for g in (ex, pv):
         g.add("show ip ospf neighbor", passthrough_show("show ip ospf neighbor")).add("show ip bgp summary", passthrough_show("show ip bgp summary"))
     cf = _global_config(_common_config(Grammar(HELPS)), False)
@@ -2135,11 +2363,13 @@ def switch_grammars():
         g.add("show interfaces status", sw_show_status).add("show interfaces", sw_show_int).add("show interfaces IF", sw_show_int)
         g.add("show mac address-table", sw_show_mac).add("show mac address-table dynamic", sw_show_mac)
         g.add("show spanning-tree", sw_show_stp).add("show ip interface brief", sw_show_ip_int_brief)
+        g.add("show etherchannel summary", sw_show_etherchannel).add("show etherchannel", sw_show_etherchannel)
     pv.add("show running-config", sw_show_run).add("show startup-config", sw_show_run)
     pv.add("write", sw_write).add("write memory", sw_write).add("copy running-config startup-config", sw_write)
+    pv.add("copy WORD WORD", h_copy)
     cf = _global_config(_common_config(Grammar(HELPS)), True)
     cf.add("hostname WORD", sw_hostname).add("interface IF", sw_interface).add("interface range LINE", sw_interface_range)
-    cf.add("vlan VLANS", sw_vlan).add("ip default-gateway A.B.C.D", sw_default_gw)
+    cf.add("vlan VLANS", sw_vlan).add("ip default-gateway A.B.C.D", sw_default_gw).add("ip default-gateway", sw_default_gw)
     cf.add("spanning-tree vlan VLANS priority <0-61440>", sw_stp_prio).add("spanning-tree mode WORD", sw_stp_mode)
     cf.add("spanning-tree vlan VLANS", sw_stp_off)
     cf.add("ip route LINE", unsupported("netlab switches are layer 2; use 'ip default-gateway' for the management SVI"))
@@ -2152,7 +2382,9 @@ def switch_grammars():
     itf.add("shutdown", sw_shutdown).add("description LINE", sw_description).add("spanning-tree portfast", sw_portfast)
     itf.add("spanning-tree portfast LINE", sw_portfast).add("speed LINE", h_speed).add("duplex LINE", h_speed)
     itf.add("ip address A.B.C.D MASK", unsupported("routed switch ports aren't supported; use 'interface vlan N' for management"))
-    itf.add("channel-group LINE", unsupported("EtherChannel isn't supported yet (Open vSwitch switches are on the roadmap)"))
+    itf.add("channel-group <1-64> mode WORD", sw_channel_group).add("channel-group <1-64>", sw_channel_group).add("channel-group", sw_channel_group)
+    itf.add("description", sw_description)
+    itf.add("spanning-tree LINE", h_terminal_noop)
     vlan = _common_config(Grammar(HELPS)).add("name WORD", sw_vlan_name)
     svi = _common_config(Grammar(HELPS)).add("ip address A.B.C.D MASK", sw_svi_ip).add("ip address", sw_svi_ip).add("shutdown", sw_svi_shut)
     svi.add("description LINE", h_terminal_noop)
@@ -2165,6 +2397,36 @@ def _fix_none(gs):
 
 RT_GRAMMARS = router_grammars()
 SW_GRAMMARS = switch_grammars()
+
+
+# --------------------------------------------------------------------------- batch (Config tab forms)
+
+_ERR = re.compile(r"^\s*% (Invalid|Incomplete|Ambiguous|Bad|Unknown|Please|Inconsistent|Configuring|Interface not|Physical|netlab: (?!saved|portfast|one spanning|speed|rapid|mst|a netlab switch has))", re.M)
+
+
+async def run_batch(env: Env, commands: list[str]) -> dict:
+    """Run IOS commands as if typed at the console, starting in privileged EXEC.
+    The Config tab forms use this, so a form and the CLI always do exactly the same thing."""
+    out: list[str] = []
+
+    async def send(t):
+        out.append(t)
+    s = Session(env, send)
+    await s.init_host()
+    s.priv = True
+    errors = []
+    for ln in commands:
+        ln = ln.strip()
+        if not ln or "\n" in ln:
+            continue
+        await s.w(s.prompt() + ln + "\n")
+        start = len(out)
+        await s.guarded(s.execute(ln))
+        reply = "".join(out[start:])
+        if _ERR.search(reply.replace("\r", "")):
+            errors.append(ln)
+    text = "".join(out).replace("\r", "")
+    return {"ok": not errors, "errors": errors, "transcript": text, "hostname": s.host}
 
 
 # --------------------------------------------------------------------------- websocket entry

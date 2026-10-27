@@ -1,5 +1,22 @@
 # NetLab build log
 
+## 2026-10-27: 0.11.0 additions (services, NICs, transceivers, templates)
+- Fix: router module ports missing from the Config tab interface list (state re-read 1.5 s after a props change).
+- PC/laptop/server NIC slot (`nic-*` modules, always eth1); `props.sfp` copper/fibre transceivers on SFP/SFP+ ports; UI refuses model/module/transceiver changes that would strand a cable on the wrong media.
+- Services tab rebuilt (`Services.jsx`): per-service pages with On/Off and running state (`/server-status`: ps + dnsmasq lease file). DHCP domain/option 150+66/lease/reservations, DNS CNAME, FTP (vsftpd, local users, PAM file without pam_shells, no anonymous: vsftpd refuses a writable chroot for anon), file upload/download/delete for FTP and TFTP folders, PC `ftp` client over curl, udhcpc sends hostname. Tested in namespaces: dnsmasq config (`--test`, CNAME answer, lease file written with hostname), vsftpd login/list/put/get/rename/delete through the PC client, bad password refused.
+- Templates: ospf-multiarea, bgp-multi-as, serial-wan, campus-rstp-lacp, small-office; FRR configs checked with `vtysh -C` (FRR 8.4). Not run as live labs (no Docker in the sandbox).
+- Docs: README, architecture, changelog, roadmap, new screenshots (office canvas, router/switch/firewall Config, Services, Physical, templates).
+- Tests: 46 passing; headless UI runs for hardware and Services.
+
+## 2026-10-27: 0.11.0, Config tab redesign, firewall, Open vSwitch, server services
+- Config tab rebuilt Packet Tracer style for every device type; router/switch forms generate IOS and run it through `ios.run_batch` (same engine as the CLI); router state parsed from FRR running config (`cfgstate.py`).
+- Firewall device (`firewall.py`, nftables): zones/levels, ordered rules with counters, masquerade + DNAT, routes. Tested end to end in network namespaces (inside→outside PAT seen as the firewall's address, outside→inside blocked, dmz→inside blocked, port forward to a DMZ web server, reject rule, firewall answers ping); template ruleset validated with `nft -c`.
+- Open vSwitch switch engine (RSTP, LACP bonds, internal-port SVI) with IOS port-channel commands. Script generation unit-tested; not run (no openvswitch module in the build sandbox).
+- Servers: TFTP (tftp-hpa, needs `-4`), rsyslog receiver, chrony. TFTP put/get and syslog receive tested between namespaces; rsyslog config validated with `rsyslogd -N1`.
+- IOS: `copy run tftp:`, `copy tftp: run` (line-by-line restore), `logging host` events (CONFIG_I, LINK-5-CHANGED).
+- Firewall edge template. VyOS dropped from this release: no official container image.
+- Tests: 44 passing. Headless UI run through router (mocked running state), switch, firewall, PC and server pages, with the resulting IOS commands and props checked.
+
 ## 2026-10-27: 0.10.0 additions after review
 - Reported: DHCP on a PC gave `mv: can't rename '/etc/resolv.conf.118': resource busy`. Cause: busybox udhcpc's default hook writes a temp file and mv's it over /etc/resolv.conf, which Docker bind-mounts. Fix: `labs.DHCP_SCRIPT` hook (sets address/gateway, writes resolv.conf in place), bind-mounted at /usr/local/bin/netlab-dhcp for PCs/servers and installed to /tmp for labs deployed before. Tested against busybox udhcpc + dnsmasq in network namespaces with a bind-mounted resolv.conf.
 - Added: reachability matrix (`reach.py`, Dashboard), IOS pipe filters, `show run` gated behind enable, Windows-style ipconfig/arp in the PC prompt, rename carries configs/<node>.
@@ -42,6 +59,7 @@ FLT-NETLAB-01: VM 120 on PV2 (`local` qcow2 40 GB), 4 vCPU host, 6144/4096 MB, v
 
 ## Watch list
 - Web-app import of isp-lab-p2 uses lab name isp-lab → destroy the CLI lab first; import a copy.
-- Switch STP is 802.1D only (30 s).
+- Linux-bridge switch STP is 802.1D only (30 s); RSTP/LACP need the OVS engine (untested on the VM).
+- 0.11.0 untested on the VM: OVS engine, the five new templates as running labs, vsftpd/busybox adduser on Alpine, FRR 10 behaviour of the Config tab.
 - Clones of labs with host bridges share the bridge.
 - Live-added devices: images not already on the VM are pulled on first add (slow the first time).

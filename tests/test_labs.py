@@ -4,7 +4,8 @@ from app import labs, impair, monitor, metrics
 
 def test_templates_create_and_generate(client):
     ids = [t["id"] for t in client.get("/api/templates").json()]
-    assert ids == ["ospf-triangle", "router-on-a-stick", "campus-stp", "isp-mpls"]
+    assert ids == ["ospf-triangle", "ospf-multiarea", "bgp-multi-as", "serial-wan", "router-on-a-stick", "campus-stp",
+                   "campus-rstp-lacp", "small-office", "firewall-edge", "isp-mpls"]
     for tid in ids:
         r = client.post(f"/api/templates/{tid}", json={"name": f"t-{tid}"})
         assert r.status_code == 200, r.text

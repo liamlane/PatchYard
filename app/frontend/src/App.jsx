@@ -360,7 +360,8 @@ function Workspace() {
     return rf.screenToFlowPosition({ x: r.left + r.width / 2 + (Math.random() * 80 - 40), y: r.top + r.height / 2 + (Math.random() * 80 - 40) });
   };
   const newIdFrom = (used, type) => { let i = 1; while (used.has(`${PREFIX[type]}${i}`)) i++; return `${PREFIX[type]}${i}`; };
-  const defaultProps = (type) => (type === "server" ? { ip_mode: "static", services: { http: { enabled: true } } } : type === "pc" ? { ip_mode: "static" } : defaultHardware(type, appSettings));
+  const defaultProps = (type) => (type === "server" ? { ip_mode: "static", services: { http: { enabled: true } }, ...defaultHardware(type, appSettings) }
+    : type === "pc" ? { ip_mode: "static", ...defaultHardware(type, appSettings) } : defaultHardware(type, appSettings));
   const addNode = (type, pos) => {
     if (!lab) return;
     const id = newIdFrom(new Set(lab.nodes.map((n) => n.id)), type);
@@ -517,7 +518,7 @@ function Workspace() {
     setMenu({ x: e.clientX, y: e.clientY, items: [
       { header: `${d.id} · ${TYPE_LABEL[d.type]}${states[d.id] ? ` · ${states[d.id]}` : ""}` },
       { label: "Open", icon: "window", onClick: () => openWin(d.id) },
-      ["router", "switch"].includes(d.type) && { label: "CLI", icon: "terminal", disabled: !running, onClick: () => openWin(d.id, "CLI") },
+      ["router", "switch", "firewall"].includes(d.type) && { label: "CLI", icon: "terminal", disabled: !running, onClick: () => openWin(d.id, "CLI") },
       ["pc", "server"].includes(d.type) && { label: "Desktop", icon: "terminal", onClick: () => openWin(d.id, "Desktop") },
       { label: "Monitor", icon: "pulse", disabled: !running, onClick: () => openWin(d.id, "Monitor") },
       { label: "Config", icon: "grid", onClick: () => openWin(d.id, "Config") },
@@ -553,7 +554,7 @@ function Workspace() {
     const p = rf.screenToFlowPosition({ x: e.clientX, y: e.clientY });
     setMenu({ x: e.clientX, y: e.clientY, items: [
       { header: "Add here" },
-      ...["router", "switch", "pc", "server"].map((t) => ({ label: TYPE_LABEL[t], icon: "plus", onClick: () => addNode(t, { x: p.x - DEV_W / 2, y: p.y - DEV_H / 2 }) })),
+      ...["router", "switch", "firewall", "pc", "server"].map((t) => ({ label: TYPE_LABEL[t], icon: "plus", onClick: () => addNode(t, { x: p.x - DEV_W / 2, y: p.y - DEV_H / 2 }) })),
       { label: "Note", icon: "note", onClick: () => addAnn("note", p) }, { label: "Area", icon: "area", onClick: () => addAnn("area", { x: p.x + 150, y: p.y + 100 }) },
       "-",
       { label: "Select all devices", icon: "grid", kbd: "Ctrl+A", onClick: () => setSel(new Set(lab.nodes.map((n) => n.id))) },
@@ -605,7 +606,7 @@ function Workspace() {
       if (mod || e.altKey) return;
       const map = { v: () => { setTool("select"); setPick(null); setPickIf(null); setPortMenu(null); }, c: () => setTool("copper"), f: () => setTool("fibre"), s: () => setTool("serial"), n: () => k.addAnn("note"), a: () => k.addAnn("area"),
         g: () => setSnap((v) => !v), o: () => setOverlay((v) => !v), m: () => k.lab && setSide((s) => (s ? null : "dash")), t: () => setTheme((t) => (t === "dark" ? "light" : "dark")),
-        "?": () => setHelp(true), ",": () => setSettingsTab("general"), 1: () => k.addNode("router"), 2: () => k.addNode("switch"), 3: () => k.addNode("pc"), 4: () => k.addNode("server"),
+        "?": () => setHelp(true), ",": () => setSettingsTab("general"), 1: () => k.addNode("router"), 2: () => k.addNode("switch"), 3: () => k.addNode("firewall"), 4: () => k.addNode("pc"), 5: () => k.addNode("server"),
         escape: () => { setPick(null); setPickIf(null); setPortMenu(null); setSel(new Set()); setSelEdge(null); setMenu(null); } };
       if (map[key] && (k.lab || ["t", "?", ",", "escape"].includes(key))) { e.preventDefault(); map[key](); }
     };
@@ -666,7 +667,7 @@ function Workspace() {
 
       <aside className="palette" aria-label="Devices and tools">
         <h3>Devices</h3>
-        {["router", "switch", "pc", "server"].map((t, i) => {
+        {["router", "switch", "firewall", "pc", "server"].map((t, i) => {
           const I = ICONS[t];
           return (
             <button key={t} className="pal" draggable disabled={!lab} onDragStart={(e) => e.dataTransfer.setData("application/netlab", t)}
@@ -702,6 +703,12 @@ function Workspace() {
           </ReactFlow>
         ) : (
           <Welcome labs={labs} tpls={tpls} onOpen={openLab} onNew={newLab} onTemplate={fromTemplate} onManager={() => setMgr("share")} />
+        )}
+        {lab && !lab.nodes.length && !(lab.annotations || []).length && (
+          <div className="empty-hint" aria-hidden="true"><div><b>An empty lab.</b> To build one:
+            <ol><li>Drag a device from the left (or press 1-5).</li><li>Pick a cable (C copper, F fibre, S serial), click two devices and choose their ports.</li>
+              <li>Double-click a device to configure it, then Deploy.</li></ol>
+            Or start from a template in the Lab manager.</div></div>
         )}
         {lab && devSel >= 2 && (
           <div className="alignbar" role="toolbar" aria-label="Align selection">
@@ -813,7 +820,7 @@ function Welcome({ labs, tpls, onOpen, onNew, onTemplate, onManager }) {
 const KEYS = [
   ["Ctrl+K / Ctrl+F", "Find a device or run a command"], ["Ctrl+Z · Ctrl+Y", "Undo · redo (topology, positions, notes)"], ["Ctrl+D", "Duplicate selected devices"],
   ["Ctrl+A", "Select all devices"], ["Shift+drag", "Box select"], ["Ctrl+click", "Add to selection"], ["Delete", "Delete selection"], ["Ctrl+S", "Save running configs"],
-  ["1 2 3 4", "Add router · switch · PC · server"], ["V · C · F · S", "Select · copper · fibre · serial tool"], ["N · A", "Add note · area"],
+  ["1 2 3 4 5", "Add router · switch · firewall · PC · server"], ["V · C · F · S", "Select · copper · fibre · serial tool"], ["N · A", "Add note · area"],
   ["O", "Traffic overlay"], ["M", "Dashboard"], ["G", "Snap to grid"], ["T", "Dark / light"], ["Right-click", "Context menu on devices, cables, canvas"],
   ["Double-click", "Edit a note or area label · maximise a window"], [",", "Settings"], ["Esc", "Cancel / clear selection"],
 ];

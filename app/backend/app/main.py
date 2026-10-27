@@ -5,7 +5,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, WebSocket, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
-from . import labs, devices, metrics, monitor, impair, labmgmt, templates, settings, alerts, live, traffic, auth, hardware, reach
+from . import labs, devices, metrics, monitor, impair, labmgmt, templates, settings, alerts, live, traffic, auth, hardware, reach, cfgstate
 from .version import VERSION, COMMIT
 from .capture import capture_for
 from .console import console
@@ -38,7 +38,7 @@ async def _fe(_: Request, e: FileExistsError):
 
 @asynccontextmanager
 async def lifespan(_app):
-    for m in ("mpls_router", "mpls_iptunnel", "vrf", "8021q", "bridge", "sch_netem", "dummy"):
+    for m in ("mpls_router", "mpls_iptunnel", "vrf", "8021q", "bridge", "sch_netem", "dummy", "openvswitch"):
         await run("modprobe", m)
     tasks = []
     if os.environ.get("NETLAB_METRICS", "1") != "0":
@@ -592,6 +592,125 @@ async def api_rename_files(lab: str, node: str, body: dict):
     if f.exists():
         f.write_text(re.sub(rf"^hostname {re.escape(old)}$", f"hostname {new}", f.read_text(), flags=re.M))
     return {"ok": True, "moved": True}
+
+
+@app.post("/api/labs/{lab}/nodes/{node}/firewall")
+async def api_firewall(lab: str, node: str, body: dict):
+    from . import firewall
+    d = labs.load(lab)
+    n = node_of(d, node)
+    if n["type"] != "firewall" or n.get("raw"):
+        raise HTTPException(400, "not a netlab firewall")
+    keep = {k: v for k, v in (n.get("props") or {}).items() if k not in firewall.DEFAULT}
+    n["props"] = {**keep, **firewall.normalise(body)}
+    labs.save(d)
+    labs.REV[lab] = labs.REV.get(lab, 0) + 1
+    labs.NODE_REV[(lab, node)] = labs.REV[lab]
+    if (await container_states(lab)).get(node) != "running":
+        labs.write_node_files(d, n)
+        return {"ok": True, "output": "Saved. Applied at the next deploy.", "props": n["props"]}
+    r = await devices.apply_firewall(d, n)
+    return {**r, "props": n["props"]}
+
+
+@app.get("/api/labs/{lab}/nodes/{node}/firewall")
+async def api_firewall_status(lab: str, node: str):
+    d = labs.load(lab)
+    return await devices.firewall_status(d, node_of(d, node))
+
+
+@app.get("/api/labs/{lab}/nodes/{node}/server/syslog")
+async def api_server_syslog(lab: str, node: str, lines: int = 300):
+    d = labs.load(lab)
+    return {"lines": devices.syslog_tail(d, node_of(d, node), max(10, min(2000, lines)))}
+
+
+@app.delete("/api/labs/{lab}/nodes/{node}/server/syslog")
+async def api_server_syslog_clear(lab: str, node: str):
+    d = labs.load(lab)
+    node_of(d, node)
+    f = labs.workdir(d) / "configs" / node / "syslog" / "syslog.log"
+    if f.exists():
+        labs.write_inplace(f, "")
+    return {"ok": True}
+
+
+SERVER_DIRS = ("tftp", "ftp")
+FILE_RE = re.compile(r"[\w.@+-]{1,128}")
+
+
+def _server_file(lab: str, node: str, kind: str, name: str | None = None):
+    d = labs.load(lab)
+    n = node_of(d, node)
+    if n["type"] != "server" or kind not in SERVER_DIRS:
+        raise HTTPException(404, "no such file area")
+    base = labs.workdir(d) / "configs" / node / kind
+    if name is None:
+        return d, n, base
+    if not FILE_RE.fullmatch(name) or name.startswith("."):
+        raise HTTPException(400, "bad file name (letters, digits, . _ - @ +)")
+    return d, n, base / name
+
+
+@app.get("/api/labs/{lab}/nodes/{node}/server/{kind}")
+async def api_server_files(lab: str, node: str, kind: str):
+    d, n, _ = _server_file(lab, node, kind)
+    return devices.server_files(d, n, kind)
+
+
+@app.get("/api/labs/{lab}/nodes/{node}/server/{kind}/{name}")
+async def api_server_file_get(lab: str, node: str, kind: str, name: str):
+    _, _, f = _server_file(lab, node, kind, name)
+    if not f.is_file():
+        raise HTTPException(404, "no such file")
+    return FileResponse(f, filename=name, media_type="application/octet-stream")
+
+
+@app.put("/api/labs/{lab}/nodes/{node}/server/{kind}/{name}")
+async def api_server_file_put(lab: str, node: str, kind: str, name: str, request: Request):
+    _, _, f = _server_file(lab, node, kind, name)
+    data = await request.body()
+    if len(data) > 20 * 1024 * 1024:
+        raise HTTPException(413, "files up to 20 MB")
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_bytes(data)
+    f.chmod(0o666)
+    return {"ok": True, "size": len(data)}
+
+
+@app.delete("/api/labs/{lab}/nodes/{node}/server/{kind}/{name}")
+async def api_server_file_delete(lab: str, node: str, kind: str, name: str):
+    _, _, f = _server_file(lab, node, kind, name)
+    if f.is_file():
+        f.unlink()
+    return {"ok": True}
+
+
+@app.get("/api/labs/{lab}/nodes/{node}/server-status")
+async def api_server_status(lab: str, node: str):
+    d = labs.load(lab)
+    n = node_of(d, node)
+    return {**(await devices.services_status(d, n)), "leases": devices.dhcp_leases(d, n)}
+
+
+@app.get("/api/labs/{lab}/nodes/{node}/state")
+async def api_node_state(lab: str, node: str):
+    d = labs.load(lab)
+    return await cfgstate.state(d, node_of(d, node))
+
+
+@app.post("/api/labs/{lab}/nodes/{node}/ios")
+async def api_node_ios(lab: str, node: str, body: dict):
+    """Apply Config-tab forms as IOS commands (same engine as the CLI tab)."""
+    from . import ios
+    d = labs.load(lab)
+    n = node_of(d, node)
+    if n["type"] not in ("router", "switch") or n.get("raw"):
+        raise HTTPException(400, "IOS commands are for netlab routers and switches")
+    cmds = [str(c) for c in body.get("commands", [])][:400]
+    if n["type"] == "router" and (await container_states(lab)).get(node) != "running":
+        raise HTTPException(409, "deploy the lab (and power the router on) to change its configuration")
+    return await ios.run_batch(ios.Env(lab, node), cmds)
 
 
 @app.post("/api/labs/{lab}/reachability")

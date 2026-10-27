@@ -25,7 +25,7 @@ ipconfig() {
       echo; echo "Ethernet adapter eth1: address released."; echo ;;
     /renew)
       echo "Requesting an address on eth1..."
-      udhcpc -i eth1 -n -q -t 4 -T 2 -s "$(__dhcp)" 2>&1 | grep -E "lease|no lease|fail" ; ipconfig ;;
+      udhcpc -i eth1 -n -q -t 4 -T 2 -x "hostname:$(hostname)" -s "$(__dhcp)" 2>&1 | grep -E "lease|no lease|fail" ; ipconfig ;;
     *) echo "Error: unrecognized or incomplete command line."; echo "ipconfig [/all | /release | /renew]" ;;
   esac
 }
@@ -33,6 +33,26 @@ alias tracert='traceroute -n'
 alias cls='clear'
 alias udhcpc='udhcpc -s "$(__dhcp)"'
 arp() { [ "$1" = "-a" ] || { command arp "$@"; return; }; echo; echo "  Internet Address      Physical Address      Type"; ip -4 neigh show dev eth1 | awk '$3=="lladdr"{printf "  %-21s %-21s dynamic\n", $1, $4}'; echo; }
+ftp() {
+  [ -n "$1" ] || { echo "Usage: ftp SERVER"; return 1; }
+  command -v curl >/dev/null || { echo "ftp needs curl on this PC image"; return 1; }
+  __h=$1; echo "Trying to connect...$__h"
+  printf "Username:"; read -r __u; printf "Password:"; stty -echo 2>/dev/null; read -r __p; stty echo 2>/dev/null; echo
+  curl -s --max-time 6 -u "$__u:$__p" "ftp://$__h/" >/dev/null || { echo "%Error: login failed or no FTP service on $__h"; return 1; }
+  echo "230- Logged in"; echo "(passive mode On)"
+  while printf "ftp>"; read -r __c __a; do
+    case "$__c" in
+      dir|ls) curl -s -u "$__u:$__p" "ftp://$__h/" ;;
+      get) [ -n "$__a" ] && curl -sf -u "$__u:$__p" -o "$__a" "ftp://$__h/$__a" && echo "Reading file $__a from $__h: [OK] $(wc -c < "$__a") bytes" || echo "%Error ftp://$__h/$__a (No such file or directory Or Permission denied)" ;;
+      put) [ -f "$__a" ] && curl -sf -u "$__u:$__p" -T "$__a" "ftp://$__h/" && echo "Writing file $__a to $__h: [OK] $(wc -c < "$__a") bytes" || echo "%Error: no local file '$__a'" ;;
+      delete) curl -sf -u "$__u:$__p" -Q "DELE $__a" "ftp://$__h/" >/dev/null && echo "Deleting file $__a from $__h: [OK]" || echo "%Error deleting $__a" ;;
+      rename) set -- $__a; curl -sf -u "$__u:$__p" -Q "RNFR $1" -Q "RNTO $2" "ftp://$__h/" >/dev/null && echo "Renamed $1 to $2" || echo "%Error renaming" ;;
+      quit|bye|exit) echo "221- Service closing control connection."; break ;;
+      "") ;;
+      *) echo "Commands: dir, get FILE, put FILE, delete FILE, rename OLD NEW, quit" ;;
+    esac
+  done
+}
 PS1='C:\> '
 """
 
@@ -122,19 +142,62 @@ async def ipconfig(lab, node, body: dict):
     else:
         # labs deployed before 0.10.1 don't have the hook mounted: install it under /tmp
         await dexec(lab, node, "sh", "-c", "cat > /tmp/netlab-dhcp && chmod +x /tmp/netlab-dhcp", input=labs.DHCP_SCRIPT.encode())
-        script.append("udhcpc -i eth1 -n -q -t 4 -T 2 -s /tmp/netlab-dhcp")
+        script.append('udhcpc -i eth1 -n -q -t 4 -T 2 -x "hostname:$(hostname)" -s /tmp/netlab-dhcp')
     rc, out, err = await dsh(lab, node, "; ".join(script) + "; ip -4 addr show eth1; ip route", timeout=30)
     return {"ok": rc == 0, "output": (out + err).strip()}
 
 
 async def apply_services(labd: dict, node: dict):
     labs.write_node_files(labd, node)
+    rc, out, err = await dsh(labd["name"], node["id"], "[ -f /etc/netlab/svc/services.sh ] && sh /etc/netlab/svc/services.sh", timeout=120)
+    if rc == 0:
+        return {"ok": True, "output": (out + err).strip()}
+    svc = node.get("props", {}).get("services", {})
+    note = ("\nTFTP, Syslog and NTP need this server redeployed (it was started by an older netlab)."
+            if any((svc.get(k) or {}).get("enabled") for k in ("tftp", "ftp", "syslog", "ntp")) else "")
     http_on = node.get("props", {}).get("services", {}).get("http", {}).get("enabled", True)
     web = ("nginx -c /etc/netlab/nginx.conf -s reload 2>/dev/null || nginx -c /etc/netlab/nginx.conf"
            if http_on else "nginx -c /etc/netlab/nginx.conf -s stop 2>/dev/null; true")
-    script = f"pkill dnsmasq; sleep 0.3; dnsmasq --conf-file=/etc/netlab/dnsmasq.conf; {web}"
+    script = f"mkdir -p /etc/netlab/svc; pkill dnsmasq; sleep 0.3; dnsmasq --conf-file=/etc/netlab/dnsmasq.conf; {web}"
     rc, out, err = await dsh(labd["name"], node["id"], script)
-    return {"ok": rc == 0, "output": (out + err).strip()}
+    return {"ok": rc == 0, "output": (out + err).strip() + note}
+
+
+def server_files(labd: dict, node: dict, kind: str) -> list[dict]:
+    d = labs.workdir(labd) / "configs" / node["id"] / kind
+    if not d.is_dir():
+        return []
+    return [{"name": f.name, "size": f.stat().st_size, "mtime": f.stat().st_mtime} for f in sorted(d.iterdir()) if f.is_file()]
+
+
+SERVICE_PROCS = {"dns": "dnsmasq", "dhcp": "dnsmasq", "http": "nginx", "tftp": "in.tftpd", "ftp": "vsftpd", "syslog": "rsyslogd", "ntp": "chronyd"}
+
+
+async def services_status(labd: dict, node: dict) -> dict:
+    """Which service daemons are actually running in the server container."""
+    c = (await netinfo.containers()).get((labd["name"], node["id"]))
+    if not c or c["state"] != "running":
+        return {"running": False, "services": {}}
+    rc, out, _ = await dsh(labd["name"], node["id"], "ps -o comm= 2>/dev/null || ps -e -o comm=", timeout=10)
+    procs = {l.strip() for l in out.splitlines()}
+    return {"running": True, "services": {k: v in procs for k, v in SERVICE_PROCS.items()}}
+
+
+def dhcp_leases(labd: dict, node: dict) -> list[dict]:
+    f = labs.workdir(labd) / "configs" / node["id"] / "svc" / "dnsmasq.leases"
+    return labs.leases(f.read_text()) if f.exists() else []
+
+
+def syslog_tail(labd: dict, node: dict, lines: int = 300) -> list[str]:
+    f = labs.workdir(labd) / "configs" / node["id"] / "syslog" / "syslog.log"
+    if not f.exists():
+        return []
+    with open(f, "rb") as fh:
+        fh.seek(0, 2)
+        size = fh.tell()
+        fh.seek(max(0, size - 200_000))
+        data = fh.read().decode(errors="replace").splitlines()
+    return data[-lines:]
 
 
 async def browse(lab, node, url: str):
@@ -176,6 +239,28 @@ async def write_pc_rc(lab, node):
     await dexec(lab, node, "sh", "-c", "cat > /etc/netlab.rc", input=PC_RC.encode())
     await dexec(lab, node, "sh", "-c", "[ -x /usr/local/bin/netlab-dhcp ] || { cat > /tmp/netlab-dhcp && chmod +x /tmp/netlab-dhcp; }",
                 input=labs.DHCP_SCRIPT.encode())
+
+
+# ---------------- firewall ----------------
+async def apply_firewall(labd: dict, node: dict):
+    labs.write_node_files(labd, node)
+    rc, out, err = await dsh(labd["name"], node["id"], "sh /etc/netlab/fw.sh 2>&1")
+    return {"ok": rc == 0, "output": (out + err).strip()}
+
+
+async def firewall_status(labd: dict, node: dict):
+    from . import firewall
+    c = (await netinfo.containers()).get((labd["name"], node["id"]))
+    if not c or c["state"] != "running" or not c["pid"]:
+        return {"running": False, "counters": {}, "conntrack": None, "ruleset": ""}
+    rc, js, _ = await run("nsenter", "-t", str(c["pid"]), "-n", "nft", "-j", "list", "ruleset", timeout=10)
+    rc2, txt, _ = await run("nsenter", "-t", str(c["pid"]), "-n", "nft", "list", "ruleset", timeout=10)
+    ct = None
+    try:
+        ct = int(open(f"/proc/{c['pid']}/root/proc/sys/net/netfilter/nf_conntrack_count").read())
+    except (OSError, ValueError):
+        pass
+    return {"running": True, "counters": firewall.counters(js) if rc == 0 else {}, "conntrack": ct, "ruleset": txt}
 
 
 # ---------------- switching (802.1Q) ----------------

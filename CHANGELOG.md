@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.11.0
+- **Config tab, Packet Tracer style** for routers, switches, firewalls, PCs and servers: a section list (Global / Routing / Switching / Interfaces / …) with one page per item, current values read back from the device (running config, or the saved config when it's off), inline validation (addresses, masks), live port status and neighbour on every interface page.
+  - Routers: settings + write memory, static routes, OSPF (router ID, per-interface areas, redistribute, default route), BGP (neighbours, networks, redistribute), MPLS/LDP per interface, interface pages (address/mask, description, OSPF area/cost/passive, MPLS, subinterfaces, loopbacks).
+  - Switches: settings and engine, spanning tree, management SVI, VLAN database, per-port access/trunk/native/allowed VLANs (checkbox picker), port-channels.
+  - Forms send IOS commands through the same engine as the CLI tab; the commands appear under the form ("Equivalent IOS commands").
+- **Firewall device** (nftables): zones with security levels, ASA-style level policy or default deny, ordered rules with live hit counters, PAT (masquerade) and port forwards, static routes, status page with tracked connections and the full ruleset. Two models (8× GE, 6× GE + 2× SFP).
+- **Open vSwitch engine** for switches: RSTP and LACP port-channels; IOS `channel-group`, `interface port-channel`, `show etherchannel summary`, `spanning-tree mode rapid-pvst`, OVS-backed `show spanning-tree` / `show mac address-table`.
+- **Services tab, Packet Tracer style** for servers: a page per service (HTTP, DHCP, DNS, TFTP, FTP, SYSLOG, NTP), each with an On/Off switch and a running/not running light read from the container, a summary page, one Save for everything, validation before it's sent.
+  - DHCP: domain name, TFTP server (options 150 and 66), lease time, MAC reservations, live lease table (PCs now send their hostname).
+  - DNS: CNAME records next to A records.
+  - HTTP: index page editor with preview.
+  - **FTP server** (vsftpd): user accounts (default cisco/cisco, like Packet Tracer), shared read/write folder. PCs get an `ftp SERVER` command prompt client (dir, get, put, delete, rename, quit).
+  - TFTP (uploads allowed), Syslog receiver (log viewer with filter), NTP server.
+  - FTP and TFTP folders: upload (button or drag and drop), download and delete from the browser.
+- **PC, laptop and server hardware**: a swappable NIC slot (Fast Ethernet, Gigabit, SFP fibre, 10G SFP+), so a PC can't be cabled with fibre into a copper NIC unless you fit a fibre NIC.
+- **Transceivers**: every SFP/SFP+ port takes a fibre optic (default) or a copper RJ45 transceiver, so copper devices plug into fibre switch ports (Physical tab → Transceivers).
+- Model, module and transceiver changes that would leave a cable on the wrong media are refused with the port named.
+- **IOS CLI**: `copy running-config|startup-config tftp:[//host/file]`, `copy tftp:… running-config` (restores line by line), `logging host` (config changes and interface shutdowns are sent as syslog messages).
+- **Templates** (all on hardware models): OSPF multi-area (ABR summarisation, stub area), BGP between three ASes (iBGP over loopbacks + OSPF underlay, eBGP), serial WAN hub-and-spoke (T1 modules, central TFTP/syslog/NTP), campus RSTP + LACP (Open vSwitch), small office (firewall PAT, one server running every service for DHCP clients), firewall edge with DMZ.
+- Fix: a router's module ports didn't appear in the Config tab interface list until the window was reopened.
+- Empty-lab hint on the canvas; device windows open slightly larger; firewall on the palette (key 3, PC 4, server 5).
+
 ## 0.10.0
 - **Hardware models and modules**: routers and switches can have a chassis (branch / ISR / 10G edge routers; Fast Ethernet 24+2, compact 8+2, access 24+4 / 48+4, 10G distribution switches) with IOS-style port names (Gi0/0/0, Fa0/1, Te1/1/1, Se0/1/0). Physical tab shows the rear panel with live port LEDs; drag modules (GE copper, GE SFP, 10GE SFP+, serial T1/E1, switch uplinks) into slots. Port names show everywhere (canvas, link panel, monitor, dashboard, alerts).
 - **Real port behaviour**: cables must match the port (copper, fibre/SFP, new serial cable), a port picker opens when you plug into a modular device, and links run at the slower end's speed (Fa 100M, Gi 1G, serial 1.544M; 10G uncapped) via netem, combined with any impairment.

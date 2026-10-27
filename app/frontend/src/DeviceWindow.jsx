@@ -1,16 +1,19 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "./api.js";
 import Terminal from "./Terminal.jsx";
 import { ICONS, TYPE_LABEL } from "./icons.jsx";
 import MonitorTab from "./Monitor.jsx";
 import HardwarePanel from "./Hardware.jsx";
 import { ifLabel, labIf } from "./hw.js";
+import { RouterConfigX, SwitchConfigX, HostConfigX, FirewallConfigX } from "./Config.jsx";
+import ServicesX from "./Services.jsx";
 
 const TABS = {
   router: ["Physical", "Config", "CLI", "Monitor"],
   switch: ["Physical", "Config", "CLI", "Monitor"],
   pc: ["Physical", "Config", "Desktop", "Monitor"],
   server: ["Physical", "Config", "Services", "Desktop", "Monitor"],
+  firewall: ["Physical", "Config", "CLI", "Monitor"],
 };
 
 function maskToPrefix(m) {
@@ -24,7 +27,7 @@ function prefixToMask(p) {
 
 export default function DeviceWindow({ lab, node, state, z, onFocus, onClose, onUpdateNode, onRename, notify, initialPos, initialTab, tabKey, deployed, poweredOff, ifStates, settings, onStatus }) {
   const tabs = TABS[node.type] || ["Physical", "Config"];
-  const [tab, setTab] = useState(initialTab && tabs.includes(initialTab) ? initialTab : tabs[node.type === "router" ? 2 : node.type === "pc" ? 2 : 0]);
+  const [tab, setTab] = useState(initialTab && tabs.includes(initialTab) ? initialTab : tabs[node.type === "router" ? 2 : node.type === "pc" ? 2 : node.raw ? 0 : 1]);
   useEffect(() => { if (initialTab && tabs.includes(initialTab)) setTab(initialTab); }, [initialTab, tabKey]); // eslint-disable-line
   const [max, setMax] = useState(false);
   const [pos, setPos] = useState(initialPos);
@@ -61,12 +64,17 @@ export default function DeviceWindow({ lab, node, state, z, onFocus, onClose, on
             onUpdateNode={onUpdateNode} notify={notify} onStatus={onStatus} />
           <Physical lab={lab} node={node} running={running} />
         </>}
-        {tab === "Config" && node.type === "router" && <RouterConfig lab={lab} node={node} running={running} onUpdateNode={onUpdateNode} onRename={onRename} notify={notify} />}
-        {tab === "Config" && node.type === "switch" && <SwitchConfig key={JSON.stringify(node.props || {})} lab={lab} node={node} running={running} onUpdateNode={onUpdateNode} onRename={onRename} notify={notify} />}
-        {tab === "Config" && node.type !== "router" && node.type !== "switch" && <BasicConfig lab={lab} node={node} running={running} onUpdateNode={onUpdateNode} onRename={onRename} />}
+        {tab === "Config" && (() => {
+          const P = { lab, node, running, onUpdateNode, onRename, notify };
+          if (node.raw) return node.type === "router" ? <RouterConfig {...P} /> : node.type === "switch" ? <SwitchConfig {...P} /> : <BasicConfig {...P} />;
+          if (node.type === "router") return <RouterConfigX {...P} />;
+          if (node.type === "switch") return <SwitchConfigX {...P} />;
+          if (node.type === "firewall") return <FirewallConfigX {...P} />;
+          return <HostConfigX {...P} />;
+        })()}
         {tab === "CLI" && (running ? <Cli lab={lab} node={node} settings={settings} /> : <NotRunning />)}
         {tab === "Desktop" && <Desktop lab={lab} node={node} running={running} onUpdateNode={onUpdateNode} notify={notify} />}
-        {tab === "Services" && <Services lab={lab} node={node} running={running} onUpdateNode={onUpdateNode} notify={notify} />}
+        {tab === "Services" && <ServicesX lab={lab} node={node} running={running} onUpdateNode={onUpdateNode} notify={notify} />}
         {tab === "Monitor" && <MonitorTab lab={lab} node={node} running={running} />}
       </div>
     </section>
@@ -77,7 +85,7 @@ function NotRunning() {
   return <p className="empty">Deploy the lab (and power the device on) to use this tab.</p>;
 }
 
-const CLI_MODES = { router: [["ios", "IOS"], ["vtysh", "FRR"], ["sh", "Shell"]], switch: [["ios", "IOS"], ["sh", "Shell"]] };
+const CLI_MODES = { router: [["ios", "IOS"], ["vtysh", "FRR"], ["sh", "Shell"]], switch: [["ios", "IOS"], ["sh", "Shell"]], firewall: [["sh", "Shell"]] };
 function Cli({ lab, node, settings }) {
   const modes = node.raw ? [[node.type === "router" ? "vtysh" : "sh", node.type === "router" ? "FRR" : "Shell"]] : CLI_MODES[node.type];
   const def = settings?.general?.cli_default === "frr" && node.type === "router" ? "vtysh" : modes[0][0];
@@ -382,55 +390,6 @@ function Browser({ lab, node }) {
       </form>
       {res && !res.ok && <p className="error">{res.error}</p>}
       {res?.ok && <iframe title="page" sandbox="" srcDoc={res.body || `<p>HTTP ${res.status}, empty body</p>`} />}
-    </div>
-  );
-}
-
-function Services({ lab, node, running, onUpdateNode, notify }) {
-  const init = node.props?.services || {};
-  const [svc, setSvc] = useState({
-    dns: { enabled: false, records: [], ...init.dns },
-    dhcp: { enabled: false, start: "", end: "", mask: "255.255.255.0", gateway: "", dns: "", ...init.dhcp },
-    http: { enabled: true, index_html: "", ...init.http },
-  });
-  const [rec, setRec] = useState({ name: "", ip: "" });
-  const [out, setOut] = useState("");
-  if (node.raw) return <p className="empty">Imported device: edit its service files in the lab folder.</p>;
-  const upd = (s, k, v) => setSvc({ ...svc, [s]: { ...svc[s], [k]: v } });
-  const save = async () => {
-    onUpdateNode(node.id, { services: svc });
-    if (!running) return setOut("Saved. Applied at the next deploy.");
-    try { const r = await api.services(lab.name, node.id, svc); setOut(r.ok ? "Services applied." : r.output); } catch (e) { notify(e.message); }
-  };
-  return (
-    <div className="form">
-      <fieldset className="box"><legend>DNS</legend>
-        <label className="chk"><input type="checkbox" checked={svc.dns.enabled} onChange={(e) => upd("dns", "enabled", e.target.checked)} /> DNS service on</label>
-        <div className="row">
-          <input placeholder="www.example.lab" value={rec.name} onChange={(e) => setRec({ ...rec, name: e.target.value })} />
-          <input placeholder="Address" value={rec.ip} onChange={(e) => setRec({ ...rec, ip: e.target.value })} />
-          <button disabled={!rec.name || !rec.ip} onClick={() => { upd("dns", "records", [...svc.dns.records, rec]); setRec({ name: "", ip: "" }); }}>Add record</button>
-        </div>
-        <table className="grid"><thead><tr><th>Name</th><th>Type</th><th>Address</th><th /></tr></thead>
-          <tbody>{svc.dns.records.map((r, i) => (
-            <tr key={i}><td>{r.name}</td><td>A</td><td className="mono">{r.ip}</td>
-              <td><button className="link" onClick={() => upd("dns", "records", svc.dns.records.filter((_, j) => j !== i))}>Remove</button></td></tr>
-          ))}</tbody></table>
-      </fieldset>
-      <fieldset className="box"><legend>DHCP</legend>
-        <label className="chk"><input type="checkbox" checked={svc.dhcp.enabled} onChange={(e) => upd("dhcp", "enabled", e.target.checked)} /> DHCP service on</label>
-        {[["start", "Start address"], ["end", "End address"], ["mask", "Subnet mask"], ["gateway", "Default gateway"], ["dns", "DNS server"]].map(([k, l]) => (
-          <label className="row" key={k}>{l} <input value={svc.dhcp[k]} onChange={(e) => upd("dhcp", k, e.target.value)} /></label>
-        ))}
-      </fieldset>
-      <fieldset className="box"><legend>HTTP</legend>
-        <label className="chk"><input type="checkbox" checked={svc.http.enabled} onChange={(e) => upd("http", "enabled", e.target.checked)} /> HTTP service on</label>
-        <label className="col">index.html
-          <textarea rows={6} value={svc.http.index_html} placeholder={`<h1>${node.id}</h1>`} onChange={(e) => upd("http", "index_html", e.target.value)} />
-        </label>
-      </fieldset>
-      <button onClick={save}>Save services</button>
-      {out && <p className="hint">{out}</p>}
     </div>
   );
 }

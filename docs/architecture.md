@@ -67,16 +67,19 @@ Router config directories are bind-mounted (`configs/<node>:/etc/frr`). FRR's `w
 
 ## Hardware: models, modules, ports
 
-A router or switch can have a chassis model (`props.chassis`) with on-board ports and module slots (`props.modules`). Ports are named the IOS way, but Linux interface names can't contain `/`, so each port has a fixed Linux name:
+Any router, switch, firewall, PC or server can have a chassis model (`props.chassis`) with on-board ports and module slots (`props.modules`). Ports are named the IOS way, but Linux interface names can't contain `/`, so each port has a fixed Linux name:
 
 | Port | Linux name |
 | --- | --- |
 | on-board ports, in order | `eth1`, `eth2`, … |
 | slot *k* (0-based), port *p* | `eth{100·(k+1)+p+1}`, e.g. slot 0/1 port 0 = `eth101` |
 
+| PC / laptop / server NIC slot | always `eth1` (Fa0, Gi0 …) |
+
 The numbering never moves when a module is added, so cables and FRR config stay put. `hardware.py` holds the catalogue and the mapping, and `hw.js` mirrors it for the UI. Devices without a model ("generic", every lab from before 0.10) keep free-form `eth1`, `eth2` … ports.
 
 - **Media**: each port type takes one cable type: copper, fibre (SFP/SFP+) or serial. The port picker only offers ports that match the cable, and the server refuses a cable on a port the hardware doesn't have.
+- **Transceivers**: an SFP or SFP+ port takes a fibre optic by default. `props.sfp` (`{"eth101": "copper"}`) fits a copper RJ45 transceiver instead, which makes the port copper, so a copper PC can plug into a fibre switch. The UI refuses a model, module or transceiver change that would leave an existing cable on a port of the wrong media (`mediaConflicts` in `hw.js`). The server doesn't enforce media on save, so older labs never get locked.
 - **Speed**: links run at the slower end's speed, applied as `netem rate` on both ends (Fa 100 Mb/s, Gi 1 Gb/s, serial 1.544 Mb/s; 10G is left uncapped). An impairment's rate is used instead when it's lower. Serial is emulated: an Ethernet veth at T1 speed, not HDLC/PPP.
 - **Power**: power off removes the device's container (unsaved running config is lost). Power on starts it from the lab file, re-plugs every cable whose other end is up, and re-applies link speed, impairments and admin-down state. With "Power off to swap modules" on (default), modules can only change while the device is off or the lab isn't deployed. A port only exists in Linux once it's cabled, which is why modules can be added to a running device with the rule turned off.
 
@@ -96,8 +99,64 @@ The CLI tab opens an IOS-style session (`ios.py`) over the console WebSocket. It
 - **Switches**: commands edit the same props as the Config tab (VLANs, access/trunk, native/allowed VLANs, SVI, STP priority, shutdown, description) and re-run the switch script. Show output is built from those props plus live bridge state (`bridge fdb`, `/sys/class/net/br0/bridge`).
 - **Stored but no effect**: `service …`, `no ip domain-lookup`, line passwords and similar commands are saved and shown in `show running-config`, but change nothing.
 - **Real effect**: `enable secret` really gates `enable`; the banner is shown at login.
-- **Not supported**: features netlab doesn't have (packet ACLs on interfaces, NAT, EtherChannel, routed switch ports, VRF creation) print a `% netlab:` message instead of pretending.
+- **Not supported**: features netlab doesn't have (packet ACLs and NAT on routers, EtherChannel on Linux-bridge switches, routed switch ports, VRF creation) print a `% netlab:` message instead of pretending.
 - **Sync**: device props changed from the CLI bump a revision. The browser pulls them in from the status poll, and the server keeps them if an older autosave arrives.
+
+## Config tab
+
+Each device's Config tab reads its current configuration from `GET /api/labs/<lab>/nodes/<node>/state`:
+
+- **Routers**: FRR's running config, parsed into interfaces, OSPF, BGP, static routes and LDP (`cfgstate.parse_frr`). If the router isn't running, the saved `frr.conf` is read instead. Live kernel state (link up/down, MAC, cable peer) is added per port.
+- **Switches, firewalls, hosts**: their props plus live port state.
+
+Router and switch forms don't write configuration themselves. They build IOS commands and send them to `POST …/ios`, which runs them in a headless IOS session (`ios.run_batch`), the same engine as the CLI tab. The transcript is shown under the form, so the form and the CLI can never disagree. Firewalls are saved as a whole model with `POST …/firewall`.
+
+## Firewall
+
+A firewall is an Alpine container with nftables. Its props hold:
+
+- interfaces (address, zone),
+- zones with security levels,
+- ordered rules,
+- NAT (masquerade per zone pair, port forwards),
+- static routes and a default gateway.
+
+`firewall.py` turns them into `fw.nft` and `fw.sh`, bind-mounted at `/etc/netlab`, and applies them with `nft -f`. The firewall is stateful: return traffic is allowed, invalid traffic is dropped, and port-forwarded traffic is allowed through. Traffic no rule matches is either allowed from a higher security level to a lower one (ASA-style), or dropped. Every rule has a counter, and the Config tab shows the hit counts.
+
+## Open vSwitch switches
+
+A switch with `engine: ovs` runs `ovsdb-server` and `ovs-vswitchd` inside its container (the host needs the `openvswitch` kernel module, which netlab loads).
+
+- The switch script rebuilds `br0` on every apply, with RSTP and per-port VLAN settings.
+- Port-channels are OVS bonds with LACP: `active`/`passive` map to LACP, `on` to static `balance-slb`.
+- The management SVI is an OVS internal port.
+
+The Linux-bridge engine stays the default because it's lighter.
+
+## Server services
+
+The server's Services tab edits `props.services` and saves everything with `POST …/services`. That regenerates the files below and runs `services.sh` in the container, which starts or stops each service to match:
+
+| Service | Software | Notes |
+| --- | --- | --- |
+| DNS / DHCP | dnsmasq | A and CNAME records; DHCP options 3, 6, 15, 66/150; `dhcp-host` reservations; lease file in `configs/<server>/svc/dnsmasq.leases` |
+| HTTP | nginx | index page from the UI, files in `configs/<server>/www` |
+| FTP | vsftpd | local users created by the script (shell-less, home `/srv/ftp`), passive ports 30000–30100, no anonymous login; files in `configs/<server>/ftp` |
+| TFTP | `in.tftpd -4 -c` | uploads allowed; files in `configs/<server>/tftp` |
+| Syslog | rsyslog | UDP/TCP 514; written to `configs/<server>/syslog/syslog.log` |
+| NTP | `chronyd -x` | serves the local clock |
+
+- **Packages** are installed with `apk` on first use.
+- **Validation**: values are checked before the lab is saved (`labs.validate_server`):
+  - addresses and MACs,
+  - CNAMEs must point at an A record on the same server,
+  - lease time format,
+  - FTP user names and passwords.
+- **Live view**: `GET …/server-status` reports which daemons are running (from `ps` in the container) and the current DHCP leases.
+- **Files**: `GET/PUT/DELETE …/server/{tftp|ftp}/{file}` lists, uploads, downloads and deletes files in the FTP and TFTP folders.
+- **Clients**:
+  - The IOS CLI's `copy … tftp:` runs the TFTP client from the netlab container inside the device's network namespace. `logging host` sends RFC 3164 messages the same way, using `logger`.
+  - PCs get an `ftp SERVER` command (a small interactive client on top of `curl`) and send their hostname with DHCP, so it shows in the lease table.
 
 ## Monitoring and alerting
 
@@ -164,7 +223,9 @@ A `vX.Y.Z` tag also publishes `X.Y.Z`. On the VM, `deploy/update.sh` pulls the n
 
 ## Known limits
 
-- The switch STP is the kernel bridge's 802.1D (about 30 s convergence). RSTP/MSTP needs Open vSwitch or mstpd, which is on the roadmap.
+- The Linux-bridge switch engine runs the kernel's 802.1D STP (about 30 s convergence). For RSTP and LACP, use the Open vSwitch engine. MST isn't supported.
+- There's no DHCP relay yet (`ip helper-address` is on the roadmap), so a DHCP server only serves its own subnet.
+- FTP has no anonymous login, because vsftpd won't chroot anonymous users into a writable folder.
 - There are no Cisco images (licensing). The IOS CLI is a translation layer over FRR: common IOS commands work, and anything it doesn't know goes to FRR as typed, so FRR's syntax rules apply there. One example is that FRR won't mix `network … area` with `ip ospf area` on the same router.
 - `?` lists the commands netlab translates. FRR-only commands work, but aren't listed.
 - Metrics come from the host and are per-container. They measure the Linux datapath, not a vendor ASIC.

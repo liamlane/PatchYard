@@ -70,6 +70,9 @@ async def _post_link_hook(labd, node_id, ifn):
     if not node:
         return ""
     lab, t, p = labd["name"], node["type"], node.get("props", {})
+    if t == "firewall" and not node.get("raw"):
+        rc, o, e = await dsh(lab, node_id, "sh /etc/netlab/fw.sh")
+        return f"{node_id}: {ifn} addressed and in its zone" + ("" if rc == 0 else f" ({(e or o).strip()[:120]})")
     if t == "switch" and not node.get("raw"):
         rc, o, e = await dsh(lab, node_id, "sh /usr/local/bin/netlab-switch")
         return f"{node_id}: {ifn} joined the bridge" + ("" if rc == 0 else f" (switch script: {(e or o).strip()[:120]})")

@@ -58,6 +58,13 @@ CHASSIS = {
                     "onboard": [("te", "1/0/", 1, 24)], "slots": [{"id": "1/1", "family": "uplink"}]},
 }
 
+CHASSIS["fw-8"] = {"type": "firewall", "label": "Firewall, 8 ports",
+                   "desc": "8× GE copper (Gi0/0-Gi0/7). Zone-based stateful firewall with NAT.",
+                   "onboard": [("gi", "0/", 0, 8)], "slots": []}
+CHASSIS["fw-4sfp"] = {"type": "firewall", "label": "Firewall, 6 GE + 2 SFP",
+                      "desc": "6× GE copper + 2× GE SFP (Gi0/6-7 fibre).",
+                      "onboard": [("gi", "0/", 0, 6), ("gi-sfp", "0/", 6, 2)], "slots": []}
+
 # ports: (port type, count). Router modules number from 0, switch uplinks from 1 (like IOS).
 MODULES = {
     "nim-4ge":  {"family": "router", "label": "4× GE copper",       "ports": [("gi", 4)]},
@@ -68,13 +75,29 @@ MODULES = {
     "up-4gsfp": {"family": "uplink", "label": "4× GE SFP uplink",   "ports": [("gi-sfp", 4)]},
     "up-2te":   {"family": "uplink", "label": "2× 10GE SFP+ uplink", "ports": [("te", 2)]},
     "up-4te":   {"family": "uplink", "label": "4× 10GE SFP+ uplink", "ports": [("te", 4)]},
+    # host network cards (PCs and servers): one port, always the Linux eth1
+    "nic-fe":   {"family": "nic", "label": "Fast Ethernet NIC (copper)", "ports": [("fa", 1)]},
+    "nic-ge":   {"family": "nic", "label": "Gigabit NIC (copper)", "ports": [("gi", 1)]},
+    "nic-sfp":  {"family": "nic", "label": "Gigabit SFP NIC (fibre)", "ports": [("gi-sfp", 1)]},
+    "nic-10g":  {"family": "nic", "label": "10G SFP+ NIC", "ports": [("te", 1)]},
 }
-FAMILY_START = {"router": 0, "uplink": 1}
-DEFAULT_CHASSIS = {"router": "router-3s", "switch": "switch-24"}
+FAMILY_START = {"router": 0, "uplink": 1, "nic": 0}
+DEFAULT_CHASSIS = {"router": "router-3s", "switch": "switch-24", "firewall": "fw-8", "pc": "pc", "server": "server"}
+CHASSIS["pc"] = {"type": "pc", "label": "PC", "desc": "Desktop PC with one swappable network card (FastEthernet0 by default).",
+                 "onboard": [], "slots": [{"id": "0", "family": "nic"}], "default_modules": {"0": "nic-fe"}}
+CHASSIS["laptop"] = {"type": "pc", "label": "Laptop", "desc": "Laptop with one swappable network card (Gigabit copper by default).",
+                     "onboard": [], "slots": [{"id": "0", "family": "nic"}], "default_modules": {"0": "nic-ge"}}
+CHASSIS["server"] = {"type": "server", "label": "Server", "desc": "Rack server with one swappable network card (GigabitEthernet0 by default).",
+                     "onboard": [], "slots": [{"id": "0", "family": "nic"}], "default_modules": {"0": "nic-ge"}}
+
+# Pluggable optics: an SFP/SFP+ port takes a fibre transceiver (default) or a copper one
+# (1000BASE-T / 10GBASE-T, like a GLC-T), so copper devices can plug into fibre switches.
+TRANSCEIVERS = {"fibre": "fibre (SX/LR)", "copper": "copper (RJ45 SFP)"}
+SFP_TYPES = ("gi-sfp", "te")
 
 
 def catalogue() -> dict:
-    return {"port_types": PORT_TYPES, "chassis": CHASSIS, "modules": MODULES, "defaults": DEFAULT_CHASSIS}
+    return {"port_types": PORT_TYPES, "chassis": CHASSIS, "modules": MODULES, "defaults": DEFAULT_CHASSIS, "transceivers": TRANSCEIVERS}
 
 
 def chassis_of(node: dict):
@@ -83,10 +106,13 @@ def chassis_of(node: dict):
     return CHASSIS.get((node.get("props") or {}).get("chassis") or "")
 
 
-def _port(ifn, ptype, name, slot=None, module=None):
+def _port(ifn, ptype, name, slot=None, module=None, sfp=None):
     t = PORT_TYPES[ptype]
-    return {"if": ifn, "name": t["short"] + name, "long": t["long"] + name, "type": ptype,
-            "media": t["media"], "kbit": t["kbit"], "slot": slot, "module": module}
+    media, label = t["media"], t["label"]
+    if ptype in SFP_TYPES and sfp == "copper":
+        media, label = "copper", t["label"] + " with copper transceiver"
+    return {"if": ifn, "name": t["short"] + name, "long": t["long"] + name, "type": ptype, "media": media, "label": label,
+            "kbit": t["kbit"], "slot": slot, "module": module, "sfp": (sfp or "fibre") if ptype in SFP_TYPES else None}
 
 
 def ports(node: dict) -> list[dict] | None:
@@ -95,10 +121,11 @@ def ports(node: dict) -> list[dict] | None:
     if not ch:
         return None
     out, i = [], 0
+    sfp = (node.get("props") or {}).get("sfp") or {}
     for ptype, prefix, first, count in ch["onboard"]:
         for n in range(count):
             i += 1
-            out.append(_port(f"eth{i}", ptype, f"{prefix}{first + n}"))
+            out.append(_port(f"eth{i}", ptype, f"{prefix}{first + n}", sfp=sfp.get(f"eth{i}")))
     mods = (node.get("props") or {}).get("modules") or {}
     for k, slot in enumerate(ch["slots"]):
         mid = mods.get(slot["id"])
@@ -108,7 +135,11 @@ def ports(node: dict) -> list[dict] | None:
         p = 0
         for ptype, count in m["ports"]:
             for _ in range(count):
-                out.append(_port(f"eth{100 * (k + 1) + p + 1}", ptype, f"{slot['id']}/{FAMILY_START[m['family']] + p}", slot["id"], mid))
+                if m["family"] == "nic":                      # host NIC: FastEthernet0 = eth1
+                    ifn, name = f"eth{p + 1}", f"{p}"
+                else:
+                    ifn, name = f"eth{100 * (k + 1) + p + 1}", f"{slot['id']}/{FAMILY_START[m['family']] + p}"
+                out.append(_port(ifn, ptype, name, slot["id"], mid, sfp=sfp.get(ifn)))
                 p += 1
     return out
 
@@ -217,6 +248,9 @@ def validate(node: dict, links: list[dict] | None = None):
             raise ValueError(f"{node['id']}: unknown module '{mid}'")
         if m["family"] != slots[sid]["family"]:
             raise ValueError(f"{node['id']}: {m['label']} doesn't fit slot {sid}")
+    for ifn, kind in (props.get("sfp") or {}).items():
+        if kind not in TRANSCEIVERS:
+            raise ValueError(f"{node['id']}: unknown transceiver '{kind}'")
     if links is not None:
         pm = port_map(node)
         for l in links:

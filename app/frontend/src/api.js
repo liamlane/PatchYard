@@ -75,6 +75,23 @@ export const api = {
   ack: (id) => req("POST", "/api/alerts/ack", id == null ? {} : { id }),
   clearResolved: () => req("DELETE", "/api/alerts/resolved"),
   hardware: () => req("GET", "/api/hardware"),
+  nodeState: (lab, n) => req("GET", `${N(lab, n)}/state`),
+  ios: (lab, n, commands) => req("POST", `${N(lab, n)}/ios`, { commands }),
+  firewall: (lab, n, body) => req("POST", `${N(lab, n)}/firewall`, body),
+  firewallStatus: (lab, n) => req("GET", `${N(lab, n)}/firewall`),
+  tftpFiles: (lab, n) => req("GET", `${N(lab, n)}/server/tftp`),
+  tftpUrl: (lab, n, f) => `${N(lab, n)}/server/tftp/${encodeURIComponent(f)}`,
+  serverFiles: (lab, n, kind) => req("GET", `${N(lab, n)}/server/${kind}`),
+  serverFileUrl: (lab, n, kind, f) => `${N(lab, n)}/server/${kind}/${encodeURIComponent(f)}`,
+  serverFileDel: (lab, n, kind, f) => req("DELETE", `${N(lab, n)}/server/${kind}/${encodeURIComponent(f)}`),
+  serverFilePut: async (lab, n, kind, file) => {
+    const r = await fetch(`${N(lab, n)}/server/${kind}/${encodeURIComponent(file.name)}`, { method: "PUT", body: file });
+    if (!r.ok) { let m = `${r.status}`; try { m = (await r.json()).detail || m; } catch { /* not json */ } throw new Error(m); }
+    return r.json();
+  },
+  serverStatus: (lab, n) => req("GET", `${N(lab, n)}/server-status`),
+  syslog: (lab, n) => req("GET", `${N(lab, n)}/server/syslog`),
+  syslogClear: (lab, n) => req("DELETE", `${N(lab, n)}/server/syslog`),
   renameFiles: (lab, n, to) => req("POST", `${N(lab, n)}/rename-files`, { to }),
   reachability: (lab) => req("POST", `${L(lab)}/reachability`),
   power: (lab, n, on) => req("POST", `${N(lab, n)}/power`, { on }),

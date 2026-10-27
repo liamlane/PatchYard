@@ -42,6 +42,15 @@ export function ServerIcon({ size = 56 }) {
     </svg>
   );
 }
+export function FirewallIcon({ size = 56 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 64 64" aria-hidden="true">
+      <rect x="8" y="14" width="48" height="36" rx="2" {...S} />
+      <path d="M8 26h48M8 38h48M20 14v12M38 14v12M14 26v12M30 26v12M46 26v12M22 38v12M40 38v12" stroke="var(--icon-line)" strokeWidth="2" />
+      <path d="M46 8c4 4 6 8 2 13 0-3-2-5-4-6 0 4-3 6-5 8-1-4 1-7 3-9 1-2 3-4 4-6z" fill="#E07B12" stroke="#B85C0A" strokeWidth="1.2" />
+    </svg>
+  );
+}
 export function CableIcon({ size = 28 }) {
   return (
     <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden="true">
@@ -51,6 +60,6 @@ export function CableIcon({ size = 28 }) {
     </svg>
   );
 }
-export const ICONS = { router: RouterIcon, switch: SwitchIcon, pc: PcIcon, server: ServerIcon };
-export const TYPE_LABEL = { router: "Router", switch: "Switch", pc: "PC", server: "Server" };
-export const PREFIX = { router: "r", switch: "sw", pc: "pc", server: "srv" };
+export const ICONS = { router: RouterIcon, switch: SwitchIcon, pc: PcIcon, server: ServerIcon, firewall: FirewallIcon };
+export const TYPE_LABEL = { router: "Router", switch: "Switch", pc: "PC", server: "Server", firewall: "Firewall" };
+export const PREFIX = { router: "r", switch: "sw", pc: "pc", server: "srv", firewall: "fw" };
