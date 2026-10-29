@@ -4,7 +4,7 @@ This sets Patchyard up on an internet-facing server where several people each ha
 
 ## What you get
 
-- **Accounts by invite.** You create invite links; each link makes one account. People sign in with a username and password, and only see and change their own labs. Admins see everything.
+- **Accounts by invite or by request.** You create invite links (each makes one account), or people request an account from the sign-in page and you approve it. People sign in with a username and password, and only see and change their own labs. Admins see everything.
 - **HTTPS.** Caddy runs next to Patchyard with a Let's Encrypt certificate. Patchyard itself only listens on 127.0.0.1.
 - **Sandboxed lab devices:**
   - Every device runs as an unprivileged container with only the network capabilities it needs (`NET_ADMIN`, `NET_RAW`) and a memory/CPU cap.
@@ -70,17 +70,27 @@ sudo apt install -y unattended-upgrades && sudo dpkg-reconfigure -plow unattende
 
 Docker publishes no ports for Patchyard: everything runs on the host network, and Caddy is the only thing listening on 80/443. Lab devices' management networks are internal.
 
-## 5. Invite people
+## 5. Let people in
+
+There are two ways in: invite links, and account requests from the sign-in page.
+
+### Account requests
+
+The sign-in page has a **Request one** link. The form asks for full name, email, organisation (optional), username, password, what they'll use it for, and agreement to personal/non-commercial use. When a request arrives you get a toast, a red dot on your avatar and a count in your account menu. Open **Admin** → **Requests**, read it, and **Approve** or **Decline**. Patchyard doesn't send email, so let them know yourself; the email address is on the request.
+
+Turn requests off under **Admin** → **Limits & sandbox** if you only want invites. Each address can send 3 requests an hour, and at most 50 can wait at once.
+
+### Invite links
 
 ![Admin → Invites](images/screen-admin-invites.png)
 
-Click your name (top right), then **Admin** → **Invites** → **Create link**. Send the link. The person picks a username and password, and lands in an empty workspace, where they can start from a template in the Lab manager.
+Click your name (top right), then **Admin** → **Invites** → **Create link**. Send the link. The person enters their name and email, picks a username and password, and lands in an empty workspace, where they can start from a template in the Lab manager.
 
 ![Creating an account from an invite link](images/screen-invite.png)
 
 In **Admin**:
 
-- **Users:** change roles, reset passwords (a new one is shown once), disable or delete accounts, and set per-user limits. The **Lab internet** box gives one user's lab devices full internet access. Leave it off unless you trust them with your server's IP address.
+- **Users:** see names and emails, change roles, reset passwords (a new one is shown once), disable or delete accounts, and set per-user limits. The **Lab internet** box gives one user's lab devices full internet access. Leave it off unless you trust them with your server's IP address.
 - **All labs:** see every lab and who owns it, open or destroy any of them, move a lab to another user, or mark one **trusted**. A trusted lab runs the old way: privileged, on the shared management network. Use that only for your own labs.
 - **Limits & sandbox:**
   - the server-wide default limits,
@@ -113,7 +123,7 @@ In **Admin**:
 
 Everything lives in `/opt/patchyard`:
 
-- `users.json` (accounts and invite hashes),
+- `users.json` (accounts, invite hashes and account requests),
 - `settings.json`,
 - `secret.key` (session signing),
 - `labs/` (every lab, config and snapshot),

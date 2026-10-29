@@ -573,7 +573,7 @@ select.act-accept { color: var(--ok); } select.act-drop, select.act-reject { col
 .acct { position: relative; }
 .acct-btn { display: inline-flex; align-items: center; gap: 6px; }
 .avatar { width: 24px; height: 24px; border-radius: 50%; background: var(--accent); color: var(--accent-ink); display: inline-grid; place-items: center; font: 600 12px var(--font); }
-.acct-menu { position: absolute; right: 0; top: calc(100% + 6px); min-width: 240px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,.25); padding: 6px; z-index: 50; display: flex; flex-direction: column; }
+.acct-menu { position: fixed; min-width: 250px; max-width: calc(100vw - 16px); background: var(--panel); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,.25); padding: 6px; z-index: 90; display: flex; flex-direction: column; }
 .acct-menu .hint { padding: 6px 8px 8px; border-bottom: 1px solid var(--line); margin-bottom: 4px; }
 .acct-menu button { display: flex; align-items: center; gap: 8px; border: 0; background: none; text-align: left; padding: 7px 8px; border-radius: 6px; }
 .acct-menu button:hover { background: var(--accent-soft); }
@@ -582,3 +582,39 @@ select.act-accept { color: var(--ok); } select.act-drop, select.act-reject { col
 .invite-made { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .invite-made .mono { word-break: break-all; }
 .login-card h3 { margin: 4px 0; }
+.login { padding: 24px 16px; }
+.login-card.login-wide { width: min(580px, 100%); }
+.login-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 14px; }
+.login-card textarea { font-size: 14px; padding: 8px 10px; resize: vertical; }
+.login-card .chk { align-items: flex-start; line-height: 1.4; white-space: normal; }
+.login-card .chk input { margin-top: 3px; }
+.hp { position: absolute; left: -10000px; width: 1px; height: 1px; opacity: 0; }
+@media (max-width: 560px) { .login-grid { grid-template-columns: 1fr; } }
+.avatar { position: relative; }
+.avatar .dot { position: absolute; top: -2px; right: -2px; width: 9px; height: 9px; border-radius: 50%; background: var(--bad, #e5484d); border: 2px solid var(--panel); }
+.badge.inline { position: static; margin-left: auto; }
+.acct-menu .badge.inline { display: inline-grid; place-items: center; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--bad, #e5484d); color: #fff; font-size: 11px; font-weight: 600; }
+.set-nav .count { margin-left: auto; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--bad); color: #fff; font-size: 11px; font-weight: 600; display: inline-grid; place-items: center; }
+.req-card { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin: 0 0 10px; display: flex; flex-direction: column; gap: 6px; background: var(--panel-2); }
+.req-card .row { gap: 10px; align-items: center; }
+.req-card blockquote { margin: 0; padding: 6px 10px; border-left: 3px solid var(--line); white-space: pre-wrap; }
+/* help guide */
+.guide .set-nav { display: flex; flex-direction: column; overflow-y: auto; }
+.guide-search { margin: 0 0 8px; width: 100%; }
+.guide-group { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted, var(--idle)); margin: 10px 8px 4px; }
+.guide-body { line-height: 1.55; max-width: 760px; }
+.guide-body h4 { margin: 16px 0 6px; }
+.guide-body ul, .guide-body ol { padding-left: 22px; margin: 6px 0; }
+.guide-body li { margin: 4px 0; }
+.guide-body b.ui { font-weight: 600; background: var(--accent-soft); padding: 0 4px; border-radius: 4px; }
+.guide-body .eq { margin: 6px 0; }
+.guide-body kbd { font-size: 11.5px; }
+.tip { display: flex; gap: 8px; align-items: flex-start; background: var(--accent-soft); border-radius: 8px; padding: 8px 10px; margin: 10px 0; }
+.faq dt { font-weight: 600; margin-top: 12px; }
+.faq dd { margin: 4px 0 0; }
+.guide-nav { margin-top: 22px; padding-top: 12px; border-top: 1px solid var(--line); }
+.settings.guide { grid-template-columns: 220px 1fr; }
+.guide .set-nav button { width: 100%; display: flex; align-items: center; gap: 8px; text-align: left; }
+.login-card input, .login-card textarea { width: 100%; min-width: 0; box-sizing: border-box; }
+.login-card textarea { font-family: inherit; }
+.login-card .chk input { width: 16px; height: 16px; padding: 0; flex: none; }

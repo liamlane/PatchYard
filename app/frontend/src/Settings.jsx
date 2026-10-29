@@ -148,11 +148,21 @@ function Security({ s, notify, me }) {
     catch (e) { notify(e.message, null, "bad"); }
     setBusy(false);
   };
+  const [prof, setProf] = useState({ full_name: me?.full_name || "", email: me?.email || "" });
+  const saveProf = async () => {
+    try { const r = await api.profile(prof); if (me) { me.full_name = r.full_name; me.email = r.email; } notify("Details saved", null, "ok"); }
+    catch (e) { notify(e.message, null, "bad"); }
+  };
   return (<>
     <h3>Account</h3>
     <table className="grid compact"><tbody>
       <tr><td>Signed in as</td><td><b>{me?.name || "—"}</b> <span className="hint">{me?.role}</span></td></tr>
     </tbody></table>
+    {me && <>
+      <Field label="Full name"><input value={prof.full_name} maxLength={80} autoComplete="name" onChange={(e) => setProf({ ...prof, full_name: e.target.value })} /></Field>
+      <Field label="Email" hint="so the admin can reach you"><input type="email" value={prof.email} maxLength={254} autoComplete="email" onChange={(e) => setProf({ ...prof, email: e.target.value })} /></Field>
+      <div className="row"><button onClick={saveProf} disabled={prof.full_name === (me.full_name || "") && prof.email === (me.email || "")}>Save details</button></div>
+    </>}
     <h3>Change password</h3>
     <Field label="Current password"><input type="password" value={cur} onChange={(e) => setCur(e.target.value)} autoComplete="current-password" /></Field>
     <Field label="New password" hint="at least 10 characters"><input type="password" value={pw} onChange={(e) => setPw(e.target.value)} autoComplete="new-password" /></Field>

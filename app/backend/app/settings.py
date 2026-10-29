@@ -33,7 +33,7 @@ DEFAULTS = {
     "security": {"auth_enabled": False, "password_hash": "", "session_hours": 12},
     # multi-user: default limits for non-admin users (0 = unlimited) and images they may pick
     "users": {"quota": {"max_labs": 5, "max_running_labs": 1, "max_devices": 20, "device_memory_mb": 512, "device_cpus": 1.0},
-              "allowed_images": []},
+              "allowed_images": [], "allow_requests": True},
     # public hosting: unprivileged lab devices, a management network per lab, and no internet
     # from labs except package downloads through Patchyard's proxy (users with 'internet' get full access)
     "sandbox": {"enabled": False, "mgmt_pool": "172.30.0.0/16", "lab_prefix": 26, "proxy_port": 3128,
@@ -133,6 +133,7 @@ def validate(s: dict) -> dict:
     q["device_cpus"] = max(0.0, min(64.0, float(q.get("device_cpus") or 0)))
     if q["device_memory_mb"] and q["device_memory_mb"] < 128:
         raise ValueError("device memory: at least 128 MB (0 = no limit)")
+    s["users"]["allow_requests"] = bool(s["users"].get("allow_requests", True))
     s["users"]["allowed_images"] = [str(x).strip()[:200] for x in s["users"].get("allowed_images") or [] if str(x).strip()][:50]
     import ipaddress as _ip
     sb = s["sandbox"]

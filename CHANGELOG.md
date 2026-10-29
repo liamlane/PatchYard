@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.12.1
+- **Account requests:** a *Request one* link on the sign-in page asks for full name, email, organisation (optional), username, password, what it's for, and acceptance of the terms. Requests wait in **Admin → Requests**; approving creates the account with the username and password the person chose. Admins get a toast, a red dot on their avatar and a count in the menu. Signing in while waiting (or after a decline) says so. Turn requests off under Admin → Limits & sandbox. Limits: 3 requests per address per hour, 50 waiting at once, a hidden bot trap; declined requests are kept 30 days.
+- **Names and emails on accounts:** invite links now ask for them too; admins see and edit them under Users; everyone can change theirs in Settings → Account.
+- **Help & how-to guide** (the ? button, or your account menu): a searchable tour of every feature, three step-by-step walkthroughs (OSPF, VLANs with router-on-a-stick, PAT), troubleshooting and the keyboard shortcuts. The `?` key still jumps to the shortcuts.
+- The account menu overlays the page instead of adding a scrollbar to the toolbar, and closes on an outside click or Esc.
+- The web UI answers `HEAD` requests (uptime monitors no longer see 405).
+- Fixed: `/api/auth/password` without a session could fall back to the open-mode admin identity (it still needed that admin's current password).
+
 ## 0.12.0
 **netlab is now Patchyard**, published for anyone to install (personal and non-commercial use, see LICENSE).
 

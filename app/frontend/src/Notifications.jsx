@@ -96,7 +96,8 @@ export function TrafficPanel({ lab, states, onClose, notify, preset }) {
 
 const BRAND = <div className="brand"><svg width="26" height="26" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="3" /><circle cx="19" cy="5" r="3" /><circle cx="19" cy="19" r="3" /><path d="M7.6 10.6l8.8-4.2M7.6 13.4l8.8 4.2" /></svg>Patchyard</div>;
 
-export function Login({ onDone }) {
+export function Login({ onDone, canRequest }) {
+  const [mode, setMode] = useState(() => (canRequest && location.pathname === "/request-account" ? "request" : "signin"));
   const [user, setUser] = useState("");
   const [pw, setPw] = useState("");
   const [err, setErr] = useState("");
@@ -106,6 +107,7 @@ export function Login({ onDone }) {
     try { await api.login(user.trim().toLowerCase(), pw); onDone(); } catch (x) { setErr(x.message); }
     setBusy(false);
   };
+  if (mode !== "signin") return <RequestAccount sent={mode === "sent"} onSent={() => setMode("sent")} onBack={() => { setMode("signin"); history.replaceState(null, "", "/"); }} />;
   return (
     <div className="login">
       <form className="login-card" onSubmit={go}>
@@ -114,7 +116,61 @@ export function Login({ onDone }) {
         <label className="col">Password<input type="password" value={pw} onChange={(e) => setPw(e.target.value)} autoComplete="current-password" /></label>
         {err && <p className="error">{err}</p>}
         <button className="primary big" disabled={busy || !pw}>Sign in</button>
-        <p className="hint">No account? Ask whoever runs this server for an invite link.</p>
+        {canRequest
+          ? <p className="hint">No account? <button type="button" className="link" onClick={() => { setMode("request"); history.replaceState(null, "", "/request-account"); }}>Request one</button>, or use an invite link if you were sent one.</p>
+          : <p className="hint">No account? Ask whoever runs this server for an invite link.</p>}
+      </form>
+    </div>
+  );
+}
+
+const NAME_OK = (v) => /^[a-z][a-z0-9_-]{2,23}$/.test(v);
+const EMAIL_OK = (v) => /^[^@\s<>"']{1,64}@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$/.test(v.trim());
+
+function RequestAccount({ sent, onSent, onBack }) {
+  const [f, setF] = useState({ full_name: "", email: "", org: "", username: "", password: "", again: "", reason: "", agree: false, website: "" });
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const set = (k, fx = (v) => v) => (e) => setF({ ...f, [k]: e.target.type === "checkbox" ? e.target.checked : fx(e.target.value) });
+  const ok = f.full_name.trim().length >= 2 && EMAIL_OK(f.email) && NAME_OK(f.username) && f.password.length >= 10 && f.password === f.again
+    && f.reason.trim().length >= 10 && f.agree;
+  const go = async (e) => {
+    e.preventDefault(); setBusy(true); setErr("");
+    try { const { again, ...body } = f; await api.accountRequest(body); onSent(); } catch (x) { setErr(x.message); }
+    setBusy(false);
+  };
+  if (sent) return (
+    <div className="login"><div className="login-card">
+      {BRAND}
+      <h3>Request sent</h3>
+      <p>An admin will review it. Once it's approved, sign in with the username and password you just chose.</p>
+      <p className="hint">Signing in before then tells you whether it's still waiting.</p>
+      <button className="primary big" onClick={onBack}>Back to sign in</button>
+    </div></div>);
+  return (
+    <div className="login">
+      <form className="login-card login-wide" onSubmit={go}>
+        {BRAND}
+        <h3>Request an account</h3>
+        <p className="hint">An admin approves every account. Your labs are private to you.</p>
+        <div className="login-grid">
+          <label className="col">Full name<input autoFocus value={f.full_name} onChange={set("full_name")} autoComplete="name" maxLength={80} /></label>
+          <label className="col">Email<input type="email" value={f.email} className={f.email && !EMAIL_OK(f.email) ? "bad" : ""} onChange={set("email")} autoComplete="email" maxLength={254} /></label>
+          <label className="col">Organisation (optional)<input value={f.org} onChange={set("org")} autoComplete="organization" maxLength={80} /></label>
+          <label className="col">Username<input value={f.username} className={f.username && !NAME_OK(f.username) ? "bad" : ""} autoComplete="username" autoCapitalize="none"
+            onChange={set("username", (v) => v.trim().toLowerCase())} />
+            <span className="hint">3-24 characters: lowercase letters, digits, _ and -.</span></label>
+          <label className="col">Password<input type="password" value={f.password} autoComplete="new-password" onChange={set("password")} />
+            <span className="hint">At least 10 characters.</span></label>
+          <label className="col">Repeat password<input type="password" value={f.again} className={f.again && f.again !== f.password ? "bad" : ""} autoComplete="new-password" onChange={set("again")} /></label>
+        </div>
+        <label className="col">What will you use it for?<textarea rows={3} value={f.reason} maxLength={500} onChange={set("reason")}
+          placeholder="e.g. CCNA study, practising OSPF and BGP, testing a design before a client rollout" /></label>
+        <input className="hp" tabIndex={-1} autoComplete="off" aria-hidden="true" value={f.website} onChange={set("website")} name="website" />
+        <label className="chk"><input type="checkbox" checked={f.agree} onChange={set("agree")} /> I'll use this server for personal, educational or other non-commercial work, and I won't use lab devices to attack or scan anything.</label>
+        {err && <p className="error">{err}</p>}
+        <button className="primary big" disabled={busy || !ok}>Send request</button>
+        <p className="hint"><button type="button" className="link" onClick={onBack}>Back to sign in</button></p>
       </form>
     </div>
   );
@@ -122,14 +178,14 @@ export function Login({ onDone }) {
 
 export function InvitePage({ token }) {
   const [state, setState] = useState(null);
-  const [f, setF] = useState({ username: "", password: "", again: "" });
+  const [f, setF] = useState({ full_name: "", email: "", username: "", password: "", again: "" });
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
   useEffect(() => { api.inviteCheck(token).then((r) => setState(r)).catch((e) => setState({ error: e.message })); }, [token]);
   const okName = /^[a-z][a-z0-9_-]{2,23}$/.test(f.username);
   const go = async (e) => {
     e.preventDefault(); setBusy(true); setErr("");
-    try { await api.inviteRedeem(token, { username: f.username, password: f.password }); location.href = "/"; } catch (x) { setErr(x.message); }
+    try { await api.inviteRedeem(token, { full_name: f.full_name, email: f.email, username: f.username, password: f.password }); location.href = "/"; } catch (x) { setErr(x.message); }
     setBusy(false);
   };
   return (
@@ -140,14 +196,16 @@ export function InvitePage({ token }) {
         {state?.error && <><p className="error">{state.error}</p><a href="/">Go to sign in</a></>}
         {state?.ok && <>
           <h3>Create your account</h3>
-          <label className="col">Username<input autoFocus value={f.username} className={f.username && !okName ? "bad" : ""} autoComplete="username" autoCapitalize="none"
+          <label className="col">Full name<input autoFocus value={f.full_name} autoComplete="name" maxLength={80} onChange={(e) => setF({ ...f, full_name: e.target.value })} /></label>
+          <label className="col">Email<input type="email" value={f.email} className={f.email && !EMAIL_OK(f.email) ? "bad" : ""} autoComplete="email" maxLength={254} onChange={(e) => setF({ ...f, email: e.target.value })} /></label>
+          <label className="col">Username<input value={f.username} className={f.username && !okName ? "bad" : ""} autoComplete="username" autoCapitalize="none"
             onChange={(e) => setF({ ...f, username: e.target.value.trim().toLowerCase() })} />
             <span className="hint">3-24 characters: lowercase letters, digits, _ and -. Your labs are private to you.</span></label>
           <label className="col">Password<input type="password" value={f.password} autoComplete="new-password" onChange={(e) => setF({ ...f, password: e.target.value })} />
             <span className="hint">At least 10 characters.</span></label>
           <label className="col">Repeat password<input type="password" value={f.again} autoComplete="new-password" onChange={(e) => setF({ ...f, again: e.target.value })} /></label>
           {err && <p className="error">{err}</p>}
-          <button className="primary big" disabled={busy || !okName || f.password.length < 10 || f.password !== f.again}>Create account</button>
+          <button className="primary big" disabled={busy || !okName || f.full_name.trim().length < 2 || !EMAIL_OK(f.email) || f.password.length < 10 || f.password !== f.again}>Create account</button>
         </>}
       </form>
     </div>

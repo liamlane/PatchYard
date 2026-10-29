@@ -12,6 +12,8 @@ import Palette from "./Palette.jsx";
 import Settings from "./Settings.jsx";
 import { NotificationsPanel, TrafficPanel, Login, InvitePage } from "./Notifications.jsx";
 import Admin from "./Admin.jsx";
+import Guide from "./Guide.jsx";
+import { createPortal } from "react-dom";
 import { setMe } from "./me.js";
 import { PortMenu } from "./Hardware.jsx";
 import { setCatalogue, portsOf, defaultHardware, labIf } from "./hw.js";
@@ -61,8 +63,10 @@ function Workspace() {
   const [side, setSide] = useState(null);           // null | "dash" | "alerts" | "traffic"
   const [appSettings, setAppSettings] = useState(null);
   const [auth, setAuth] = useState({ checked: false, need: false, user: null });
-  const [admin, setAdmin] = useState(false);
+  const [admin, setAdmin] = useState(null);          // null | admin tab to open
   const [acct, setAcct] = useState(false);
+  const acctBtn = useRef(null);
+  const lastReq = useRef(-1);
   const [alertSum, setAlertSum] = useState(null);
   const lastEid = useRef(-1);
   const [settingsTab, setSettingsTab] = useState(null);
@@ -75,7 +79,7 @@ function Workspace() {
   const [menu, setMenu] = useState(null);
   const [palette, setPalette] = useState(null);
   const [mgr, setMgr] = useState(null);
-  const [help, setHelp] = useState(false);
+  const [help, setHelp] = useState(null);            // null | guide section id
   const [hit, setHit] = useState(null);
   const [tpls, setTpls] = useState([]);
   // simulation
@@ -110,7 +114,7 @@ function Workspace() {
   }, []);
   const refreshLabs = useCallback(() => api.labs().then(setLabs).catch((e) => notify(e.message, null, "bad")), [notify]);
   useEffect(() => {
-    api.authState().then((a) => { setMe(a.user); setAuth({ checked: true, need: a.enabled && !a.logged_in, user: a.user, multi: a.multi_user }); })
+    api.authState().then((a) => { setMe(a.user); setAuth({ checked: true, need: a.enabled && !a.logged_in, user: a.user, multi: a.multi_user, requests: a.requests }); })
       .catch(() => setAuth({ checked: true, need: false, user: null }));
     const h = () => setAuth((x) => ({ ...x, checked: true, need: true }));
     window.addEventListener("netlab-auth", h);
@@ -143,6 +147,10 @@ function Workspace() {
         }
       }
       lastEid.current = Math.max(lastEid.current, r.last_event, ...r.events.map((e) => e.eid));
+      if (r.requests != null) {
+        if (r.requests > lastReq.current && lastReq.current >= 0) notify(`New account request${r.requests - lastReq.current > 1 ? "s" : ""}`, "Review it in Admin → Requests", "warn");
+        lastReq.current = r.requests;
+      }
     }).catch(() => {});
     load(); const t = setInterval(load, 5000);
     return () => { alive = false; clearInterval(t); };
@@ -589,7 +597,8 @@ function Workspace() {
     { label: "Undo", icon: "undo", group: "Edit", kbd: "Ctrl+Z", run: undo, disabled: !past.current.length },
     { label: "Redo", icon: "redo", group: "Edit", kbd: "Ctrl+Y", run: redo, disabled: !future.current.length },
     { label: "Duplicate selection", icon: "copy", group: "Edit", kbd: "Ctrl+D", run: duplicate, disabled: !sel.size },
-    { label: "Keyboard shortcuts", icon: "keyboard", group: "Help", kbd: "?", run: () => setHelp(true) },
+    { label: "Help & how-to guide", icon: "help", group: "Help", run: () => setHelp("start") },
+    { label: "Keyboard shortcuts", icon: "keyboard", group: "Help", kbd: "?", run: () => setHelp("shortcuts") },
     { label: "Settings", icon: "gear", group: "App", kbd: ",", run: () => setSettingsTab("general") },
     { label: "Alert rules", icon: "flag", group: "App", run: () => setSettingsTab("alerts") },
     { label: "Notifications", icon: "bell", group: "App", run: () => setSide("alerts") },
@@ -611,7 +620,7 @@ function Workspace() {
       if (mod || e.altKey) return;
       const map = { v: () => { setTool("select"); setPick(null); setPickIf(null); setPortMenu(null); }, c: () => setTool("copper"), f: () => setTool("fibre"), s: () => setTool("serial"), n: () => k.addAnn("note"), a: () => k.addAnn("area"),
         g: () => setSnap((v) => !v), o: () => setOverlay((v) => !v), m: () => k.lab && setSide((s) => (s ? null : "dash")), t: () => setTheme((t) => (t === "dark" ? "light" : "dark")),
-        "?": () => setHelp(true), ",": () => setSettingsTab("general"), 1: () => k.addNode("router"), 2: () => k.addNode("switch"), 3: () => k.addNode("firewall"), 4: () => k.addNode("pc"), 5: () => k.addNode("server"),
+        "?": () => setHelp("shortcuts"), ",": () => setSettingsTab("general"), 1: () => k.addNode("router"), 2: () => k.addNode("switch"), 3: () => k.addNode("firewall"), 4: () => k.addNode("pc"), 5: () => k.addNode("server"),
         escape: () => { setPick(null); setPickIf(null); setPortMenu(null); setSel(new Set()); setSelEdge(null); setMenu(null); } };
       if (map[key] && (k.lab || ["t", "?", ",", "escape"].includes(key))) { e.preventDefault(); map[key](); }
     };
@@ -628,7 +637,7 @@ function Workspace() {
 
   const invite = location.pathname.match(/^\/invite\/([\w-]+)$/);
   if (invite) return <InvitePage token={invite[1]} />;
-  if (auth.need) return <><Login onDone={() => { api.authState().then((a) => { setMe(a.user); setAuth({ checked: true, need: false, user: a.user, multi: a.multi_user }); }); }} /><Toasts items={toasts} onClose={(id) => setToasts((x) => x.filter((t) => t.id !== id))} /></>;
+  if (auth.need) return <><Login canRequest={auth.requests} onDone={() => { history.replaceState(null, "", "/"); api.authState().then((a) => { setMe(a.user); setAuth({ checked: true, need: false, user: a.user, multi: a.multi_user, requests: a.requests }); }); }} /><Toasts items={toasts} onClose={(id) => setToasts((x) => x.filter((t) => t.id !== id))} /></>;
   const me = auth.user;
   return (
     <div className={`app ${sideOpen ? `app-side app-${sideOpen}` : ""}`}>
@@ -670,17 +679,20 @@ function Workspace() {
           <Icon name="bell" />{alertSum?.unacked > 0 && <span className="badge">{alertSum.unacked > 99 ? "99+" : alertSum.unacked}</span>}</button>
         <TB icon="gear" label="Settings" kbd="," onClick={() => setSettingsTab("general")} />
         <TB icon={theme === "dark" ? "sun" : "moon"} label={theme === "dark" ? "Light mode" : "Dark mode"} kbd="T" onClick={() => setTheme(theme === "dark" ? "light" : "dark")} />
-        <TB icon="keyboard" label="Keyboard shortcuts" kbd="?" onClick={() => setHelp(true)} />
+        <TB icon="help" label="Help & how-to guide" onClick={() => setHelp(help ? null : "start")} on={!!help} />
         {me && auth.multi !== undefined && (
           <div className="acct">
-            <button className={`tb acct-btn ${acct ? "on" : ""}`} onClick={() => setAcct(!acct)} aria-haspopup="menu" aria-expanded={acct} title="Your account">
-              <span className="avatar">{me.name.slice(0, 1).toUpperCase()}</span><span className="tb-text">{me.name}</span></button>
-            {acct && <div className="acct-menu" role="menu" onMouseLeave={() => setAcct(false)}>
-              <div className="hint">Signed in as <b>{me.name}</b>{me.role === "admin" ? " (admin)" : ""}</div>
-              {me.role === "admin" && <button role="menuitem" onClick={() => { setAcct(false); setAdmin(true); }}><Icon name="grid" size={15} /> Admin: users, invites, labs</button>}
-              <button role="menuitem" onClick={() => { setAcct(false); setSettingsTab("security"); }}><Icon name="keyboard" size={15} /> Change password</button>
+            <button ref={acctBtn} className={`tb acct-btn ${acct ? "on" : ""}`} onClick={() => setAcct(!acct)} aria-haspopup="menu" aria-expanded={acct}
+              title={alertSum?.requests ? `${alertSum.requests} account request(s) waiting` : "Your account"}>
+              <span className="avatar">{me.name.slice(0, 1).toUpperCase()}{alertSum?.requests > 0 && <span className="dot" />}</span><span className="tb-text">{me.name}</span></button>
+            {acct && <AccountMenu anchor={acctBtn} onClose={() => setAcct(false)}>
+              <div className="hint">Signed in as <b>{me.full_name || me.name}</b>{me.full_name ? ` (${me.name})` : ""}{me.role === "admin" ? " · admin" : ""}</div>
+              {me.role === "admin" && <button role="menuitem" onClick={() => { setAcct(false); setAdmin("users"); }}><Icon name="grid" size={15} /> Admin: users, invites, labs</button>}
+              {me.role === "admin" && alertSum?.requests > 0 && <button role="menuitem" onClick={() => { setAcct(false); setAdmin("requests"); }}><Icon name="flag" size={15} /> Account requests <span className="badge inline">{alertSum.requests}</span></button>}
+              <button role="menuitem" onClick={() => { setAcct(false); setSettingsTab("security"); }}><Icon name="keyboard" size={15} /> Account and password</button>
+              <button role="menuitem" onClick={() => { setAcct(false); setHelp("start"); }}><Icon name="help" size={15} /> Help & how-to guide</button>
               <button role="menuitem" onClick={async () => { await api.logout(); location.href = "/"; }}><Icon name="x" size={15} /> Sign out</button>
-            </div>}
+            </AccountMenu>}
           </div>)}
       </header>
 
@@ -803,8 +815,8 @@ function Workspace() {
         onPickDevice={(id) => { focusNode(id); openWin(id); }} onClose={() => setPalette(null)} />}
       {mgr && <LabManager lab={lab} deployed={deployed} initial={mgr} notify={notify} onOpenLab={openLab} onClose={() => setMgr(null)} refreshLabs={refreshLabs}
         onReload={async () => setLab(await api.get(lab.name))} onRedeploy={doDeploy} />}
-      {help && <Help onClose={() => setHelp(false)} />}
-      {admin && <Admin onClose={() => { setAdmin(false); refreshLabs(); }} notify={notify} me={me} onOpenLab={openLab} />}
+      {help && <Guide section={help} onSection={setHelp} onClose={() => setHelp(null)} keys={KEYS} me={me} accounts={!!me && auth.multi !== undefined} />}
+      {admin && <Admin tab={admin} onTab={setAdmin} onClose={() => { setAdmin(null); refreshLabs(); }} notify={notify} me={me} onOpenLab={openLab} />}
       {settingsTab && <Settings initial={settingsTab} me={me} onClose={() => setSettingsTab(null)} notify={notify} labs={labs} lab={lab} onSaved={setAppSettings}
         appearance={{ theme, setTheme, overlay, setOverlay, showIf, setShowIf, snap, setSnap }} />}
       {busy && <div className="busy" role="status"><div className="spinner" /><p>{busy}</p></div>}
@@ -844,10 +856,19 @@ const KEYS = [
   ["O", "Traffic overlay"], ["M", "Dashboard"], ["G", "Snap to grid"], ["T", "Dark / light"], ["Right-click", "Context menu on devices, cables, canvas"],
   ["Double-click", "Edit a note or area label · maximise a window"], [",", "Settings"], ["Esc", "Cancel / clear selection"],
 ];
-function Help({ onClose }) {
-  return (
-    <Modal title="Keyboard shortcuts" onClose={onClose}>
-      <table className="grid keys"><tbody>{KEYS.map(([k, d]) => <tr key={k}><td>{k.split(" ").map((x, i) => (x.length <= 2 || x.includes("+") ? <kbd key={i}>{x}</kbd> : <span key={i}> {x} </span>))}</td><td>{d}</td></tr>)}</tbody></table>
-    </Modal>
-  );
+// The account menu lives in a portal so it overlays the canvas instead of growing the toolbar
+// (the toolbar scrolls sideways on narrow screens, which would clip it or add a scrollbar).
+function AccountMenu({ anchor, onClose, children }) {
+  const ref = useRef(null);
+  const [pos, setPos] = useState(null);
+  useEffect(() => {
+    const place = () => { const r = anchor.current?.getBoundingClientRect(); if (r) setPos({ top: r.bottom + 6, right: Math.max(8, window.innerWidth - r.right) }); };
+    place();
+    const away = (e) => { if (!ref.current?.contains(e.target) && !anchor.current?.contains(e.target)) onClose(); };
+    const esc = (e) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("resize", place); document.addEventListener("mousedown", away); document.addEventListener("keydown", esc);
+    return () => { window.removeEventListener("resize", place); document.removeEventListener("mousedown", away); document.removeEventListener("keydown", esc); };
+  }, [anchor, onClose]);
+  if (!pos) return null;
+  return createPortal(<div ref={ref} className="acct-menu" role="menu" style={{ top: pos.top, right: pos.right }}>{children}</div>, document.body);
 }

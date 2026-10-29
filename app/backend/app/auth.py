@@ -33,6 +33,14 @@ def current() -> dict:
     return CURRENT.get() or {"name": "admin", "role": "admin"}
 
 
+def signed_in() -> dict | None:
+    """Who is signed in, or None (unlike current(), no open-mode fallback on /api/auth/ routes)."""
+    who = CURRENT.get()
+    if who is None and not enabled():
+        return {"name": first_admin(), "role": "admin"}
+    return who
+
+
 def is_admin() -> bool:
     return current()["role"] == "admin"
 

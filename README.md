@@ -112,7 +112,7 @@ A Services tab with a page per service, each with an On/Off switch and a running
 
 ### Share a server
 
-- **Accounts by invite link.** Each person's labs are private to them; admins see everything.
+- **Accounts by invite link, or by request** from the sign-in page with admin approval. Each person's labs are private to them; admins see everything.
 - **Per-user limits:** labs, labs running at once, devices per lab, memory and CPU per device.
 - **On a public server** (`--public`), lab devices are sandboxed:
   - unprivileged containers,
@@ -135,6 +135,7 @@ A Services tab with a page per service, each with an On/Off switch and a running
   - dual-ISP MPLS L3VPN.
 - **Labs:** snapshots with diff and restore, clone, and zip export and import.
 - **Access:** an admin login.
+- **Help:** a built-in, searchable how-to guide covering every feature, with step-by-step walkthroughs.
 
 ## Screenshots
 

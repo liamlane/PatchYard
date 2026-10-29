@@ -111,9 +111,11 @@ def test_multi_user_isolation(client):
         alice = TestClient(app)
         assert alice.get(f"/api/invite/{inv['token']}").json()["role"] == "user"
         assert alice.post(f"/api/invite/{inv['token']}", json={"username": "alice", "password": "short"}).status_code == 400
-        r = alice.post(f"/api/invite/{inv['token']}", json={"username": "alice", "password": "alice-pass-123"})
+        assert alice.post(f"/api/invite/{inv['token']}", json={"username": "alice", "password": "alice-pass-123"}).status_code == 400  # name/email
+        r = alice.post(f"/api/invite/{inv['token']}", json={"username": "alice", "password": "alice-pass-123", "full_name": "Alice A", "email": "alice@example.com"})
         assert r.status_code == 200 and r.json()["user"]["role"] == "user"
-        assert TestClient(app).post(f"/api/invite/{inv['token']}", json={"username": "eve", "password": "eve-pass-1234"}).status_code == 400
+        assert TestClient(app).post(f"/api/invite/{inv['token']}", json={"username": "eve", "password": "eve-pass-1234", "full_name": "Eve", "email": "e@example.com"}).status_code == 400
+        assert alice.get("/api/auth/state").json()["user"]["email"] == "alice@example.com"
         # alice sees only her labs; the admin's lab is invisible, not forbidden
         assert alice.post("/api/labs", json={"name": "t-alice"}).status_code == 200
         assert [l["name"] for l in alice.get("/api/labs").json()] == ["t-alice"]
@@ -153,6 +155,61 @@ def test_multi_user_isolation(client):
     finally:
         users.FILE.unlink(missing_ok=True)
         client.cookies.clear()
+
+
+def test_account_requests(client):
+    from app import users, auth
+    from fastapi.testclient import TestClient
+    from app.main import app
+    auth._FAILS.clear()
+    form = {"username": "dave", "password": "dave-pass-123", "full_name": "Dave Smith", "email": "dave@example.com",
+            "org": "Acme", "reason": "Studying for the CCNA", "agree": True}
+    try:
+        assert client.post("/api/auth/password", json={"username": "boss", "new": "admin-pass-123"}).status_code == 200
+        client.post("/api/auth/login", json={"username": "boss", "password": "admin-pass-123"})
+        anon = TestClient(app)
+        assert anon.get("/api/auth/state").json()["requests"] is True
+        assert anon.post("/api/auth/request", json={**form, "email": "not-an-email"}).status_code == 400
+        assert anon.post("/api/auth/request", json=form).json() == {"ok": True}
+        auth._FAILS.clear()
+        assert anon.post("/api/auth/request", json={**form, "username": "dave2"}).status_code == 400     # same email waiting
+        assert anon.post("/api/auth/request", json={**form, "username": "boss", "email": "x@example.com"}).status_code == 400
+        # waiting: sign-in explains, admin sees it
+        r = anon.post("/api/auth/login", json={"username": "dave", "password": "dave-pass-123"})
+        assert r.status_code == 403 and "waiting" in r.json()["detail"]
+        assert anon.post("/api/auth/login", json={"username": "dave", "password": "wrong-pass-123"}).status_code == 401
+        assert client.get("/api/alerts/summary").json()["requests"] == 1
+        req = client.get("/api/admin/requests").json()[0]
+        assert req["full_name"] == "Dave Smith" and req["org"] == "Acme" and "hash" not in req
+        assert anon.get("/api/admin/requests").status_code == 401
+        u = client.post(f"/api/admin/requests/{req['id']}/approve", json={}).json()
+        assert u["name"] == "dave" and u["email"] == "dave@example.com" and u["role"] == "user"
+        assert client.get("/api/alerts/summary").json()["requests"] == 0
+        auth._FAILS.clear()
+        assert anon.post("/api/auth/login", json={"username": "dave", "password": "dave-pass-123"}).status_code == 200
+        assert anon.post("/api/admin/requests/x/approve", json={}).status_code == 403
+        assert anon.patch("/api/auth/profile", json={"full_name": "David Smith"}).json()["full_name"] == "David Smith"
+        # decline
+        auth._FAILS.clear()
+        anon2 = TestClient(app)
+        anon2.post("/api/auth/request", json={**form, "username": "erin", "email": "erin@example.com"})
+        rid = next(r["id"] for r in client.get("/api/admin/requests").json() if r["username"] == "erin")
+        client.post(f"/api/admin/requests/{rid}/decline")
+        assert "declined" in anon2.post("/api/auth/login", json={"username": "erin", "password": "dave-pass-123"}).json()["detail"]
+        # bots and turned off
+        auth._FAILS.clear()
+        assert anon2.post("/api/auth/request", json={**form, "username": "bot", "email": "b@example.com", "website": "x"}).json() == {"ok": True}
+        assert not any(r["username"] == "bot" for r in client.get("/api/admin/requests").json())
+        s = client.get("/api/settings").json(); s["users"]["allow_requests"] = False; s.pop("_meta", None)
+        assert client.put("/api/settings", json=s).status_code == 200
+        assert anon2.post("/api/auth/request", json={**form, "username": "fred", "email": "f@example.com"}).status_code == 404
+        # unauthenticated password change no longer falls back to the open-mode admin
+        assert TestClient(app).post("/api/auth/password", json={"current": "admin-pass-123", "new": "hacked-pass-123"}).status_code == 401
+    finally:
+        s = client.get("/api/settings").json(); s["users"]["allow_requests"] = True; s.pop("_meta", None); client.put("/api/settings", json=s)
+        users.FILE.unlink(missing_ok=True)
+        client.cookies.clear()
+        auth._FAILS.clear()
 
 
 def test_traffic_validation():

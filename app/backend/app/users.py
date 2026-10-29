@@ -3,7 +3,10 @@
 Stored in <home>/users.json next to settings.json:
   {"users":   {name: {"hash", "role": "admin"|"user", "created", "last_login", "disabled",
                        "gen": int (bumped to revoke sessions), "internet": bool, "quota": {..overrides}}},
-   "invites": {sha256(token): {"created", "expires", "by", "role", "note", "used_by", "used_at"}}}
+   "invites": {sha256(token): {"created", "expires", "by", "role", "note", "used_by", "used_at"}},
+   "requests": {id: {"username", "full_name", "email", "org", "reason", "hash", "created", "ip",
+                     "state": "pending"|"declined", "decided", "by"}}}
+Users also carry "full_name" and "email" (optional for accounts made before 0.12.1).
 
 Invite tokens are only shown once (when created); the file keeps their hash.
 A single-user install (one admin, login on) is the same thing with one user in it.
@@ -23,7 +26,7 @@ class UserError(ValueError):
 
 
 def _empty():
-    return {"users": {}, "invites": {}}
+    return {"users": {}, "invites": {}, "requests": {}}
 
 
 def _load() -> dict:
@@ -33,6 +36,7 @@ def _load() -> dict:
         d = _empty()
     d.setdefault("users", {})
     d.setdefault("invites", {})
+    d.setdefault("requests", {})
     if not d["users"]:
         _migrate(d)
     return d
@@ -69,6 +73,36 @@ def check_password(pw: str) -> str:
     return pw
 
 
+EMAIL_RE = re.compile(r"^[^@\s<>\"']{1,64}@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$")
+CTRL_RE = re.compile(r"[\x00-\x1f\x7f<>]")
+
+
+def check_email(email: str, required=True) -> str:
+    email = (email or "").strip()
+    if not email and not required:
+        return ""
+    if len(email) > 254 or not EMAIL_RE.match(email):
+        raise UserError("email: enter a valid email address")
+    return email
+
+
+def check_text(v: str, label: str, lo: int, hi: int, required=True) -> str:
+    v = " ".join(str(v or "").split())
+    if not v and not required:
+        return ""
+    if CTRL_RE.search(v):
+        raise UserError(f"{label}: < and > aren't allowed")
+    if len(v) < lo or len(v) > hi:
+        raise UserError(f"{label}: {lo}-{hi} characters")
+    return v
+
+
+def _email_taken(d: dict, email: str, skip_user: str = "", skip_req: str = "") -> bool:
+    e = email.lower()
+    return any((u.get("email") or "").lower() == e for n, u in d["users"].items() if n != skip_user) or \
+        any(r["email"].lower() == e and r["state"] == "pending" for i, r in d["requests"].items() if i != skip_req)
+
+
 def _hash(pw: str) -> str:
     from .auth import hash_password
     return hash_password(pw)
@@ -90,21 +124,28 @@ def any_users() -> bool:
 
 
 def public(name: str, u: dict) -> dict:
-    return {"name": name, "role": u.get("role", "user"), "created": u.get("created"), "last_login": u.get("last_login"),
+    return {"name": name, "full_name": u.get("full_name", ""), "email": u.get("email", ""), "role": u.get("role", "user"), "created": u.get("created"), "last_login": u.get("last_login"),
             "disabled": bool(u.get("disabled")), "internet": bool(u.get("internet")), "quota": u.get("quota") or {}}
 
 
-def create(name: str, password: str, role: str = "user", internet: bool = False) -> dict:
+def create(name: str, password: str | None, role: str = "user", internet: bool = False,
+           full_name: str = "", email: str = "", pw_hash: str | None = None) -> dict:
     name = check_name(name)
-    check_password(password)
+    if pw_hash is None:
+        check_password(password)
     if role not in ("admin", "user"):
         raise UserError("role must be admin or user")
+    full_name = check_text(full_name, "name", 2, 80, required=False)
+    email = check_email(email, required=False)
     with _LOCK:
         d = _load()
         if name in d["users"]:
             raise UserError(f"user {name} already exists")
-        d["users"][name] = {"hash": _hash(password), "role": role, "created": time.time(), "gen": 1,
-                            "internet": bool(internet or role == "admin"), "quota": {}}
+        if email and _email_taken(d, email):
+            raise UserError("that email address already has an account")
+        d["users"][name] = {"hash": pw_hash or _hash(password), "role": role, "created": time.time(), "gen": 1,
+                            "internet": bool(internet or role == "admin"), "quota": {},
+                            "full_name": full_name, "email": email}
         _save(d)
         return public(name, d["users"][name])
 
@@ -157,6 +198,13 @@ def update(name: str, **kw) -> dict:
             u["gen"] = int(u.get("gen", 1)) + 1
         if "internet" in kw:
             u["internet"] = bool(kw["internet"])
+        if "full_name" in kw:
+            u["full_name"] = check_text(kw["full_name"], "name", 2, 80, required=False)
+        if "email" in kw:
+            e = check_email(kw["email"], required=False)
+            if e and _email_taken(d, e, skip_user=name):
+                raise UserError("that email address is used by another account")
+            u["email"] = e
         if "quota" in kw:
             q = {}
             for k, v in (kw["quota"] or {}).items():
@@ -255,12 +303,106 @@ def check_invite(token: str) -> dict:
     return i
 
 
-def redeem(token: str, name: str, password: str) -> dict:
+def redeem(token: str, name: str, password: str, full_name: str = "", email: str = "") -> dict:
     with _LOCK:
         i = check_invite(token)
-        u = create(name, password, role=i["role"])
+        check_text(full_name, "name", 2, 80)
+        check_email(email)
+        u = create(name, password, role=i["role"], full_name=full_name, email=email)
         d = _load()
         inv = d["invites"][_th(token)]
         inv["used_by"], inv["used_at"] = u["name"], time.time()
         _save(d)
         return u
+
+
+# ------------------------------------------------------------------ account requests (from the sign-in page)
+
+MAX_PENDING = 50
+KEEP_DECLINED = 30 * 86400
+
+
+def _prune(d: dict):
+    now = time.time()
+    for k in [k for k, r in d["requests"].items() if r["state"] == "declined" and now - (r.get("decided") or 0) > KEEP_DECLINED]:
+        del d["requests"][k]
+
+
+def request_account(username: str, password: str, full_name: str, email: str, org: str, reason: str, ip: str = "") -> dict:
+    """Someone asks for an account; an admin approves or declines it in Admin → Requests."""
+    username = check_name(username)
+    check_password(password)
+    full_name = check_text(full_name, "name", 2, 80)
+    email = check_email(email)
+    org = check_text(org, "organisation", 2, 80, required=False)
+    reason = check_text(reason, "what you'll use it for", 10, 500)
+    with _LOCK:
+        d = _load()
+        _prune(d)
+        pending = [r for r in d["requests"].values() if r["state"] == "pending"]
+        if len(pending) >= MAX_PENDING:
+            raise UserError("too many requests are waiting: try again later")
+        if username in d["users"] or any(r["username"] == username for r in pending):
+            raise UserError("that username is taken: pick another")
+        if _email_taken(d, email):
+            raise UserError("that email address already has an account or a request waiting")
+        rid = secrets.token_hex(6)
+        d["requests"][rid] = {"username": username, "full_name": full_name, "email": email, "org": org, "reason": reason,
+                              "hash": _hash(password), "created": time.time(), "ip": ip, "state": "pending"}
+        _save(d)
+    return {"ok": True}
+
+
+def list_requests() -> list[dict]:
+    with _LOCK:
+        d = _load()
+    out = [{"id": k, **{x: r.get(x) for x in ("username", "full_name", "email", "org", "reason", "created", "ip", "state", "decided", "by")}}
+           for k, r in d["requests"].items()]
+    return sorted(out, key=lambda r: (r["state"] != "pending", -r["created"]))
+
+
+def pending_count() -> int:
+    with _LOCK:
+        return sum(1 for r in _load()["requests"].values() if r["state"] == "pending")
+
+
+def approve_request(rid: str, by: str, internet: bool = False) -> dict:
+    with _LOCK:
+        d = _load()
+        r = d["requests"].get(rid)
+        if not r or r["state"] != "pending":
+            raise UserError("that request isn't waiting any more")
+        del d["requests"][rid]                 # out of the way of create()'s email check
+        _save(d)
+        try:
+            return create(r["username"], None, role="user", internet=internet, full_name=r["full_name"], email=r["email"], pw_hash=r["hash"])
+        except UserError:
+            d = _load()
+            d["requests"][rid] = r
+            _save(d)
+            raise
+
+
+def decline_request(rid: str, by: str):
+    with _LOCK:
+        d = _load()
+        r = d["requests"].get(rid)
+        if not r:
+            raise UserError("no such request")
+        if r["state"] == "pending":
+            r.update(state="declined", decided=time.time(), by=by)
+        else:
+            del d["requests"][rid]             # declining again = forget it
+        _save(d)
+
+
+def request_status(username: str, password: str) -> str | None:
+    """For the sign-in page: 'pending' or 'declined' if this username + password match a request."""
+    from .auth import check_password as chk
+    name = (username or "").strip().lower()
+    with _LOCK:
+        d = _load()
+    for r in d["requests"].values():
+        if r["username"] == name and r.get("hash") and chk(password or "", r["hash"]):
+            return r["state"]
+    return None

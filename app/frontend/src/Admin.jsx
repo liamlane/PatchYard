@@ -3,18 +3,21 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "./api.js";
 import { Modal, Icon } from "./ui.jsx";
 
-const TABS = [["users", "Users", "grid"], ["invites", "Invites", "plus"], ["labs", "All labs", "layers"], ["limits", "Limits & sandbox", "gear"]];
+const TABS = [["users", "Users", "grid"], ["requests", "Requests", "flag"], ["invites", "Invites", "plus"], ["labs", "All labs", "layers"], ["limits", "Limits & sandbox", "gear"]];
 const QK = [["max_labs", "Labs"], ["max_running_labs", "Running at once"], ["max_devices", "Devices per lab"], ["device_memory_mb", "Memory per device (MB)"], ["device_cpus", "CPUs per device"]];
 const ago = (t) => (!t ? "never" : (() => { const s = Date.now() / 1000 - t; return s < 120 ? "just now" : s < 7200 ? `${Math.round(s / 60)} min ago` : s < 172800 ? `${Math.round(s / 3600)} h ago` : `${Math.round(s / 86400)} days ago`; })());
 
-export default function Admin({ onClose, notify, me, onOpenLab }) {
-  const [tab, setTab] = useState("users");
+export default function Admin({ tab = "users", onTab, onClose, notify, me, onOpenLab }) {
+  const setTab = onTab;
+  const [pending, setPending] = useState(0);
+  useEffect(() => { api.adminRequests().then((r) => setPending(r.filter((x) => x.state === "pending").length)).catch(() => {}); }, [tab]);
   return (
     <Modal title="Admin" onClose={onClose} xwide footer={<button onClick={onClose}>Close</button>}>
       <div className="settings">
-        <nav className="set-nav">{TABS.map(([k, l, i]) => <button key={k} className={tab === k ? "on" : ""} onClick={() => setTab(k)}><Icon name={i} size={16} />{l}</button>)}</nav>
+        <nav className="set-nav">{TABS.map(([k, l, i]) => <button key={k} className={tab === k ? "on" : ""} onClick={() => setTab(k)}><Icon name={i} size={16} />{l}{k === "requests" && pending > 0 && <span className="count">{pending}</span>}</button>)}</nav>
         <div className="set-body">
           {tab === "users" && <Users notify={notify} me={me} />}
+          {tab === "requests" && <Requests notify={notify} onChange={setPending} />}
           {tab === "invites" && <Invites notify={notify} />}
           {tab === "labs" && <AllLabs notify={notify} onOpenLab={(n) => { onOpenLab(n); onClose(); }} />}
           {tab === "limits" && <Limits notify={notify} />}
@@ -27,7 +30,8 @@ export default function Admin({ onClose, notify, me, onOpenLab }) {
 function Users({ notify, me }) {
   const [list, setList] = useState(null);
   const [edit, setEdit] = useState(null);
-  const [nu, setNu] = useState({ username: "", role: "user" });
+  const [nu, setNu] = useState({ username: "", role: "user", full_name: "", email: "" });
+  const [prof, setProf] = useState(null);
   const [secret, setSecret] = useState(null);
   const load = useCallback(() => api.adminUsers().then(setList).catch((e) => notify(e.message, null, "bad")), [notify]);
   useEffect(() => { load(); }, [load]);
@@ -38,10 +42,11 @@ function Users({ notify, me }) {
   if (!list) return <p className="hint">Loading…</p>;
   return (<>
     <h3>Users</h3>
-    <table className="grid compact admin-users"><thead><tr><th>User</th><th>Role</th><th>Labs</th><th>Running</th><th>Last sign-in</th><th>Lab internet</th><th /></tr></thead>
+    <table className="grid compact admin-users"><thead><tr><th>User</th><th>Name and email</th><th>Role</th><th>Labs</th><th>Running</th><th>Last sign-in</th><th>Lab internet</th><th /></tr></thead>
       <tbody>{list.map((u) => (
         <tr key={u.name} className={u.disabled ? "hint" : ""}>
           <td><b>{u.name}</b>{u.name === me?.name && <span className="hint"> (you)</span>}{u.disabled && <span className="hint"> · disabled</span>}</td>
+          <td>{u.full_name || <span className="hint">—</span>}<br /><span className="hint">{u.email ? <a href={`mailto:${u.email}`}>{u.email}</a> : "no email"}</span></td>
           <td><select value={u.role} disabled={u.name === me?.name} onChange={(e) => patch(u.name, { role: e.target.value }, `${u.name} is now ${e.target.value === "admin" ? "an admin" : "a user"}`)}>
             <option value="user">user</option><option value="admin">admin</option></select></td>
           <td>{u.labs}{u.effective_quota.max_labs ? <span className="hint"> / {u.effective_quota.max_labs}</span> : ""}</td>
@@ -50,6 +55,7 @@ function Users({ notify, me }) {
           <td><input type="checkbox" checked={u.role === "admin" || u.internet} disabled={u.role === "admin"} title="Full internet from this user's lab devices (otherwise package mirrors only)"
             onChange={(e) => patch(u.name, { internet: e.target.checked })} /></td>
           <td><span className="row">
+            <button className="link" onClick={() => setProf(prof?.name === u.name ? null : { name: u.name, full_name: u.full_name || "", email: u.email || "" })}>Details</button>
             <button className="link" onClick={() => setEdit(edit === u.name ? null : u.name)}>Limits</button>
             <button className="link" onClick={() => confirm(`Reset ${u.name}'s password? They'll be signed out.`) && patch(u.name, { reset_password: true })}>Reset password</button>
             {u.name !== me?.name && <button className="link" onClick={() => patch(u.name, { disabled: !u.disabled }, u.disabled ? `${u.name} enabled` : `${u.name} disabled and signed out`)}>{u.disabled ? "Enable" : "Disable"}</button>}
@@ -62,14 +68,24 @@ function Users({ notify, me }) {
         </tr>))}</tbody></table>
     {secret && <div className="secstate on"><Icon name="flag" /> New password for <b>{secret.name}</b>: <code className="mono">{secret.password}</code> <span className="hint">(shown once; send it to them securely)</span>
       <button className="link" onClick={() => setSecret(null)}>hide</button></div>}
+    {prof && <div className="subbox">
+      <h4>Details for {prof.name}</h4>
+      <div className="formrow">
+        <label>Full name<input value={prof.full_name} maxLength={80} onChange={(e) => setProf({ ...prof, full_name: e.target.value })} /></label>
+        <label>Email<input type="email" value={prof.email} maxLength={254} onChange={(e) => setProf({ ...prof, email: e.target.value })} /></label>
+        <button onClick={() => setProf(null)}>Cancel</button>
+        <button className="primary" onClick={() => { patch(prof.name, { full_name: prof.full_name, email: prof.email }, `Details for ${prof.name} saved`); setProf(null); }}>Save</button>
+      </div></div>}
     {edit && <QuotaEdit user={list.find((u) => u.name === edit)} onSave={(q) => { patch(edit, { quota: q }, `Limits for ${edit} saved`); setEdit(null); }} onCancel={() => setEdit(null)} />}
     <h3>Add a user directly</h3>
     <p className="hint">Usually easier: send an invite link (Invites). This creates the account now and shows a generated password once.</p>
     <div className="formrow">
       <label>Username<input value={nu.username} placeholder="alice" onChange={(e) => setNu({ ...nu, username: e.target.value.trim().toLowerCase() })} /></label>
+      <label>Full name<input value={nu.full_name} maxLength={80} onChange={(e) => setNu({ ...nu, full_name: e.target.value })} /></label>
+      <label>Email<input type="email" value={nu.email} maxLength={254} onChange={(e) => setNu({ ...nu, email: e.target.value })} /></label>
       <label>Role<select value={nu.role} onChange={(e) => setNu({ ...nu, role: e.target.value })}><option value="user">user</option><option value="admin">admin</option></select></label>
       <button className="primary" disabled={!/^[a-z][a-z0-9_-]{2,23}$/.test(nu.username)} onClick={async () => {
-        try { const r = await api.adminUserCreate(nu); setSecret({ name: r.name, password: r.password }); setNu({ username: "", role: "user" }); load(); } catch (e) { notify(e.message, null, "bad"); }
+        try { const r = await api.adminUserCreate(nu); setSecret({ name: r.name, password: r.password }); setNu({ username: "", role: "user", full_name: "", email: "" }); load(); } catch (e) { notify(e.message, null, "bad"); }
       }}>Create</button>
     </div>
   </>);
@@ -86,6 +102,46 @@ function QuotaEdit({ user, onSave, onCancel }) {
         <button onClick={onCancel}>Cancel</button><button className="primary" onClick={() => onSave(q)}>Save</button></div>
     </div>
   );
+}
+
+function Requests({ notify, onChange }) {
+  const [list, setList] = useState(null);
+  const [net, setNet] = useState({});
+  const load = useCallback(() => api.adminRequests().then((r) => { setList(r); onChange(r.filter((x) => x.state === "pending").length); })
+    .catch((e) => notify(e.message, null, "bad")), [notify, onChange]);
+  useEffect(() => { load(); }, [load]);
+  if (!list) return <p className="hint">Loading…</p>;
+  const pending = list.filter((r) => r.state === "pending"), done = list.filter((r) => r.state !== "pending");
+  const act = async (r, ok) => {
+    try {
+      if (ok) { await api.adminRequestApprove(r.id, { internet: !!net[r.id] }); notify(`${r.username} approved: they can sign in now`, r.email, "ok"); }
+      else { await api.adminRequestDecline(r.id); notify(`${r.username}'s request declined`, null, "ok"); }
+      load();
+    } catch (e) { notify(e.message, null, "bad"); }
+  };
+  return (<>
+    <h3>Account requests</h3>
+    <p className="hint">People ask for an account from the sign-in page (turn that off under Limits & sandbox). Approving creates the account with the username and password they chose, and the server's default limits. Patchyard doesn't send email: let them know yourself.</p>
+    {!pending.length && <p className="empty">No requests waiting.</p>}
+    {pending.map((r) => (
+      <div key={r.id} className="req-card">
+        <div className="row"><b>{r.full_name}</b><span className="mono">{r.username}</span><span className="grow" /><span className="hint">{ago(r.created)}{r.ip ? ` · from ${r.ip}` : ""}</span></div>
+        <div><a href={`mailto:${r.email}`}>{r.email}</a>{r.org && <span className="hint"> · {r.org}</span>}</div>
+        <blockquote>{r.reason}</blockquote>
+        <div className="row">
+          <label className="chk" title="Full internet from this user's lab devices (otherwise package mirrors only)"><input type="checkbox" checked={!!net[r.id]} onChange={(e) => setNet({ ...net, [r.id]: e.target.checked })} /> Lab internet</label>
+          <span className="grow" />
+          <button onClick={() => confirm(`Decline ${r.full_name}'s request?`) && act(r, false)}>Decline</button>
+          <button className="primary" onClick={() => act(r, true)}>Approve</button>
+        </div>
+      </div>))}
+    {done.length > 0 && <>
+      <h3>Declined</h3>
+      <p className="hint">Kept for 30 days so the person sees "declined" when they try to sign in, and can't request again with the same email straight away.</p>
+      <table className="grid compact"><thead><tr><th>Name</th><th>Username</th><th>Email</th><th>Declined</th><th /></tr></thead>
+        <tbody>{done.map((r) => <tr key={r.id}><td>{r.full_name}</td><td className="mono">{r.username}</td><td>{r.email}</td><td>{ago(r.decided)} by {r.by}</td>
+          <td><button className="link" onClick={() => act(r, false)}>Forget</button></td></tr>)}</tbody></table></>}
+  </>);
 }
 
 function Invites({ notify }) {
@@ -153,6 +209,9 @@ function Limits({ notify }) {
     <p className="hint">Admins have no limits. Per-user overrides are under Users → Limits. 0 = unlimited.</p>
     <div className="formrow">{QK.map(([k, l]) => (
       <label key={k}>{l}<input className="narrow" value={q[k]} onChange={(e) => upd("users", "quota", { ...q, [k]: e.target.value.replace(/[^\d.]/g, "") })} /></label>))}</div>
+    <h3>Sign-up</h3>
+    <label className="chk"><input type="checkbox" checked={s.users.allow_requests !== false} onChange={(e) => upd("users", "allow_requests", e.target.checked)} /> Let people request an account from the sign-in page</label>
+    <p className="hint">Requests wait in Admin → Requests until you approve them. Invite links work either way.</p>
     <h3>Images users may choose</h3>
     <p className="hint">Besides the lab defaults (FRR, network-multitool, Alpine). One per line.</p>
     <textarea rows={3} className="mono" value={(s.users.allowed_images || []).join("\n")} onChange={(e) => upd("users", "allowed_images", e.target.value.split("\n"))} />

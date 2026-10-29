@@ -660,8 +660,12 @@ async def api_settings_put(body: dict):
 @app.get("/api/auth/state")
 async def api_auth_state(request: Request):
     who = auth.session_user(request.cookies.get(auth.COOKIE)) if auth.enabled() else auth.current()
+    if who:
+        u = users.get(who["name"]) or {}
+        who = {**who, "full_name": u.get("full_name", ""), "email": u.get("email", "")}
     return {"enabled": auth.enabled(), "logged_in": who is not None, "user": who,
-            "multi_user": len(users.all_users()) > 1, "sandbox": sandbox.enabled()}
+            "multi_user": len(users.all_users()) > 1, "sandbox": sandbox.enabled(),
+            "requests": auth.enabled() and bool(settings.get("users.allow_requests", True))}
 
 
 def _set_cookie(resp: JSONResponse, request: Request, name: str):
@@ -686,6 +690,11 @@ async def api_login(body: dict, request: Request):
     if not u:
         auth.failed(f"ip:{ip}", f"user:{name}")
         await asyncio.sleep(1.0)
+        st = await asyncio.to_thread(users.request_status, name, str(body.get("password", "")))
+        if st == "pending":
+            raise HTTPException(403, "your account request is waiting for an admin to approve it")
+        if st == "declined":
+            raise HTTPException(403, "your account request was declined")
         raise HTTPException(401, "wrong username or password")
     users.touch_login(name)
     return _set_cookie(JSONResponse({"ok": True, "user": {"name": name, "role": u.get("role", "user")}}), request, name)
@@ -704,11 +713,43 @@ async def api_password(body: dict, request: Request):
     if not users.any_users():
         u = users.create(str(body.get("username") or "admin"), str(body.get("new", "")), role="admin")
         return _set_cookie(JSONResponse({"ok": True, "enabled": True}), request, u["name"])
-    me = auth.current()["name"]
+    who = auth.signed_in()
+    if not who:
+        raise HTTPException(401, "login required")
+    me = who["name"]
     if not await asyncio.to_thread(users.verify, me, str(body.get("current", ""))):
         raise HTTPException(403, "current password is wrong")
     users.set_password(me, str(body.get("new", "")))
     return _set_cookie(JSONResponse({"ok": True, "enabled": True}), request, me)
+
+
+@app.patch("/api/auth/profile")
+async def api_profile(body: dict):
+    """Change your own name and email."""
+    who = auth.signed_in()
+    if not who or not users.get(who["name"]):
+        raise HTTPException(401, "login required")
+    u = users.update(who["name"], **{k: body[k] for k in ("full_name", "email") if k in body})
+    return {"ok": True, "full_name": u["full_name"], "email": u["email"]}
+
+
+@app.post("/api/auth/request")
+async def api_account_request(body: dict, request: Request):
+    """Ask for an account from the sign-in page; admins approve it in Admin → Requests."""
+    if not auth.enabled() or not settings.get("users.allow_requests", True):
+        raise HTTPException(404, "account requests are turned off on this server")
+    ip = _client_ip(request)
+    if auth.throttled(f"req:{ip}", limit=3, window=3600):
+        raise HTTPException(429, "too many requests from your address: try again in an hour")
+    auth.failed(f"req:{ip}")                     # every attempt counts towards the limit
+    if str(body.get("website") or ""):           # hidden field: only bots fill it in
+        return {"ok": True}
+    if not body.get("agree"):
+        raise HTTPException(400, "please accept the terms of use")
+    await asyncio.to_thread(users.request_account, str(body.get("username", "")), str(body.get("password", "")),
+                            str(body.get("full_name", "")), str(body.get("email", "")), str(body.get("org", "")),
+                            str(body.get("reason", "")), ip)
+    return {"ok": True}
 
 
 @app.get("/api/invite/{token}")
@@ -723,7 +764,8 @@ async def api_invite_redeem(token: str, body: dict, request: Request):
     if auth.throttled(f"inv:{ip}", limit=10):
         raise HTTPException(429, "too many attempts: wait 15 minutes")
     try:
-        u = users.redeem(token, str(body.get("username", "")), str(body.get("password", "")))
+        u = users.redeem(token, str(body.get("username", "")), str(body.get("password", "")),
+                         full_name=str(body.get("full_name", "")), email=str(body.get("email", "")))
     except users.UserError:
         auth.failed(f"inv:{ip}")
         raise
@@ -747,13 +789,14 @@ async def api_admin_users():
 @app.post("/api/admin/users")
 async def api_admin_user_create(body: dict):
     pw = str(body.get("password") or "") or secrets.token_urlsafe(12)
-    u = users.create(str(body.get("username", "")), pw, role=str(body.get("role") or "user"), internet=bool(body.get("internet")))
+    u = users.create(str(body.get("username", "")), pw, role=str(body.get("role") or "user"), internet=bool(body.get("internet")),
+                     full_name=str(body.get("full_name") or ""), email=str(body.get("email") or ""))
     return {**u, "password": pw}
 
 
 @app.patch("/api/admin/users/{name}")
 async def api_admin_user_update(name: str, body: dict):
-    kw = {k: body[k] for k in ("role", "disabled", "internet", "quota") if k in body}
+    kw = {k: body[k] for k in ("role", "disabled", "internet", "quota", "full_name", "email") if k in body}
     if name == auth.current()["name"] and (kw.get("disabled") or kw.get("role") == "user"):
         raise HTTPException(400, "you can't disable or demote yourself")
     u = users.update(name, **kw)
@@ -795,6 +838,25 @@ async def api_admin_lab_owner(lab: str, body: dict):
     return {"ok": True}
 
 
+@app.get("/api/admin/requests")
+async def api_admin_requests():
+    return users.list_requests()
+
+
+@app.post("/api/admin/requests/{rid}/approve")
+async def api_admin_request_approve(rid: str, body: dict | None = None):
+    u = users.approve_request(rid, auth.current()["name"], internet=bool((body or {}).get("internet")))
+    if u.get("internet"):
+        await sandbox.refresh_firewall()
+    return u
+
+
+@app.post("/api/admin/requests/{rid}/decline")
+async def api_admin_request_decline(rid: str):
+    users.decline_request(rid, auth.current()["name"])
+    return {"ok": True}
+
+
 @app.get("/api/admin/invites")
 async def api_admin_invites():
     return users.list_invites()
@@ -823,6 +885,8 @@ async def api_alert_summary(after: int = 0):
     only = my_labs()
     s = await asyncio.to_thread(alerts.summary, only)
     s["events"] = alerts.events_after(after, only)
+    if auth.is_admin() and auth.enabled():
+        s["requests"] = users.pending_count()
     return s
 
 
@@ -1043,7 +1107,7 @@ if UI.exists():
 
     UI_ROOT = UI.resolve()
 
-    @app.get("/{path:path}")
+    @app.api_route("/{path:path}", methods=["GET", "HEAD"])
     async def spa(path: str):
         if path.startswith(("api/", "ws/")):
             raise HTTPException(404, "no such API route")
