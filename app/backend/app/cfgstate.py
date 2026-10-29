@@ -5,7 +5,7 @@ running) plus kernel state per port. Switches, firewalls and hosts: their props 
 source of truth for those devices) plus live port state.
 """
 import json, re
-from . import hardware, labs, netinfo
+from . import hardware, labs, netinfo, l3
 from .util import dexec, run
 
 
@@ -199,6 +199,13 @@ async def state(lab: dict, node: dict) -> dict:
             if s:
                 r["vlan"] = int(s["vlan"])
             r["ldp"] = bool(cfg["ldp"] and r["if"] in cfg["ldp"]["interfaces"])
+        hits = {}
+        if running and l3.has_l3(props):
+            from . import netinfo
+            c = (await netinfo.containers()).get((lab["name"], nid))
+            if c and c.get("pid"):
+                rc, out, _ = await l3.NS(pid=c["pid"]).run("nft", "-j", "list", "ruleset", timeout=10)
+                hits = {k: v[0] for k, v in l3.counters(out).items()} if rc == 0 else {}
         return {**base, "source": source, "hostname": cfg["hostname"] or nid, "ports": rows,
-                "ospf": cfg["ospf"], "bgp": cfg["bgp"], "static": cfg["static"], "ldp": cfg["ldp"], "other": cfg["other"]}
+                "ospf": cfg["ospf"], "bgp": cfg["bgp"], "static": cfg["static"], "ldp": cfg["ldp"], "other": cfg["other"], "hits": hits}
     return {**base, "ports": _port_rows(node, peers, kern)}

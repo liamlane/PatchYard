@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 720" width="1100" height="720" role="img" aria-label="netlab architecture"><title>netlab architecture</title>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 720" width="1100" height="720" role="img" aria-label="Patchyard architecture"><title>Patchyard architecture</title>
 <style>
   .bg{fill:#ffffff} .grp{fill:#f5f7fa;stroke:#c9d2dc} .grp2{fill:#eef3f9;stroke:#9fb3c8}
   .box{fill:#ffffff;stroke:#b8c4d0} .acc{fill:#e8f1fd;stroke:#3b82f6} .grn{fill:#e9f7ef;stroke:#22a35a}
@@ -30,9 +30,9 @@
 <text x="34" y="362" class="s" text-anchor="start">docker build → GHCR</text>
 <text x="34" y="380" class="s" text-anchor="start">on every push to main</text>
 <rect x="300" y="20" width="780" height="680" rx="14" class="grp" stroke-width="1.4"/>
-<text x="316" y="44" class="g" text-anchor="start">FLT-NETLAB-01 · UBUNTU 24.04 VM ON PROXMOX (PV2)</text>
+<text x="316" y="44" class="g" text-anchor="start">LINUX HOST OR VM · DOCKER ENGINE</text>
 <rect x="320" y="56" width="740" height="274" rx="14" class="grp2" stroke-width="1.4"/>
-<text x="336" y="80" class="g" text-anchor="start">netlab container  ·  ghcr.io/&lt;user&gt;/netlab</text>
+<text x="336" y="80" class="g" text-anchor="start">patchyard container  ·  ghcr.io/liamlane/patchyard</text>
 <text x="336" y="104" class="s" text-anchor="start">FastAPI + uvicorn: REST API, WebSockets and the built UI on :8080. Privileged, host network / PID / cgroup.</text>
 <rect x="336" y="120" width="168" height="62" rx="10" class="box" stroke-width="1.4"/>
 <text x="350" y="144" class="t" text-anchor="start">Labs</text>
@@ -63,7 +63,7 @@
 <text x="334" y="390" class="t" text-anchor="start">Docker Engine</text>
 <text x="334" y="410" class="s" text-anchor="start">runs every lab device as a container</text>
 <rect x="640" y="366" width="320" height="76" rx="10" class="org" stroke-width="1.4"/>
-<text x="654" y="390" class="t" text-anchor="start">/opt/netlab  (host volume)</text>
+<text x="654" y="390" class="t" text-anchor="start">/opt/patchyard  (host volume)</text>
 <text x="654" y="410" class="s" text-anchor="start">labs/&lt;lab&gt;/  settings.json  metrics.db</text>
 <text x="654" y="428" class="s" text-anchor="start">lab.json · configs/ · snapshots/</text>
 <rect x="320" y="480" width="740" height="180" rx="14" class="grp" stroke-width="1.4"/>
@@ -89,12 +89,12 @@
 <text x="890" y="578" class="s" text-anchor="start">DNS · DHCP · HTTP</text>
 <text x="890" y="596" class="s" text-anchor="start">per-server records</text>
 <text x="336" y="645" class="s" text-anchor="start">veth pairs are the cables · management network clab-mgmt 172.31.255.0/24</text>
-<text x="320" y="688" class="m" text-anchor="start">kernel modules: mpls_router · mpls_iptunnel · vrf · 8021q · bridge · sch_netem</text>
+<text x="320" y="688" class="m" text-anchor="start">kernel modules: bridge · 8021q · sch_netem · dummy · vrf · mpls · openvswitch · nf_tables</text>
 <path d="M250,120 L320,120" class="ln" marker-end="url(#a)" marker-start="url(#a)"/>
 <text x="285" y="110" class="l" text-anchor="middle">HTTP·WS</text>
 <path d="M250,355 L285,355 L285,300 L320,300" class="lnd" marker-end="url(#a)"/>
-<text x="20" y="434" class="s" text-anchor="start">The VM pulls the image with</text>
-<text x="20" y="452" class="s" text-anchor="start">docker compose (deploy/update.sh).</text>
+<text x="20" y="434" class="s" text-anchor="start">The host pulls the image with</text>
+<text x="20" y="452" class="s" text-anchor="start">docker compose (install.sh / update.sh).</text>
 <path d="M465,330 L465,366" class="ln" marker-end="url(#a)"/>
 <rect x="472" y="340" width="84.6" height="18" rx="4" class="lb"/>
 <text x="478" y="353" class="l" text-anchor="start">docker.sock</text>

@@ -153,7 +153,7 @@ async def apply_services(labd: dict, node: dict):
     if rc == 0:
         return {"ok": True, "output": (out + err).strip()}
     svc = node.get("props", {}).get("services", {})
-    note = ("\nTFTP, Syslog and NTP need this server redeployed (it was started by an older netlab)."
+    note = ("\nTFTP, Syslog and NTP need this server redeployed (it was started by an older version)."
             if any((svc.get(k) or {}).get("enabled") for k in ("tftp", "ftp", "syslog", "ntp")) else "")
     http_on = node.get("props", {}).get("services", {}).get("http", {}).get("enabled", True)
     web = ("nginx -c /etc/netlab/nginx.conf -s reload 2>/dev/null || nginx -c /etc/netlab/nginx.conf"

@@ -270,6 +270,12 @@ class _FakeEnv(ios.Env):
     async def states(self):
         return {}
 
+    async def apply_l3(self):
+        from app import l3
+        n = next(x for x in self.load()["nodes"] if x["id"] == self.node_id)
+        l3.ruleset(n.get("props") or {}, {})          # must always render
+        return []
+
 
 def test_switch_ios_batch_edits_props(client):
     client.post("/api/labs", json={"name": "t-swios"})
@@ -302,8 +308,8 @@ def test_server_dns_dhcp_ftp_config():
                                "reservations": [{"mac": "AA-BB-CC-00-11-22", "ip": "10.0.0.50", "name": "printer"}]},
                       "ftp": {"enabled": True, "users": [{"user": "admin", "password": "pw"}]}}}
     c = labs.dnsmasq_conf(p)
-    for want in ("host-record=srv.lab,10.0.0.5", "cname=www.lab,srv.lab", "dhcp-range=10.0.0.100,10.0.0.150,255.255.255.0,1h",
-                 "dhcp-option=15,lab.local", "dhcp-option=150,10.0.0.5", "dhcp-host=aa:bb:cc:00:11:22,10.0.0.50,printer",
+    for want in ("host-record=srv.lab,10.0.0.5", "cname=www.lab,srv.lab", "dhcp-range=set:p0,10.0.0.100,10.0.0.150,255.255.255.0,1h",
+                 "dhcp-option=tag:p0,15,lab.local", "dhcp-option=tag:p0,150,10.0.0.5", "dhcp-host=aa:bb:cc:00:11:22,10.0.0.50,printer",
                  "dhcp-leasefile=/etc/netlab/svc/dnsmasq.leases"):
         assert want in c, want
     s = labs.services_script(p)
@@ -338,3 +344,100 @@ def test_server_file_areas(client):
     bad = labs.load("t-files")
     bad["nodes"][0]["props"] = {"services": {"dhcp": {"enabled": True, "start": "x", "end": "y"}}}
     assert client.put("/api/labs/t-files", json=bad).status_code == 400
+
+
+def test_dhcp_pools():
+    p = {"services": {"dhcp": {"enabled": True, "lease": "2h", "pools": [
+        {"name": "users", "start": "10.10.0.100", "end": "10.10.0.199", "mask": "255.255.255.0", "gateway": "10.10.0.1", "dns": "10.20.0.5"},
+        {"name": "voice", "start": "10.30.0.10", "end": "10.30.0.50", "mask": "255.255.255.0", "gateway": "10.30.0.1", "tftp": "10.20.0.5"}]}}}
+    c = labs.dnsmasq_conf(p)
+    for want in ("dhcp-range=set:p0,10.10.0.100,10.10.0.199,255.255.255.0,2h", "dhcp-option=tag:p0,3,10.10.0.1",
+                 "dhcp-range=set:p1,10.30.0.10,10.30.0.50,255.255.255.0,2h", "dhcp-option=tag:p1,150,10.20.0.5"):
+        assert want in c, want
+    with pytest.raises(ValueError):
+        labs.dnsmasq_conf({"services": {"dhcp": {"enabled": True, "pools": [{"name": "x", "start": "10.0.0.10", "end": "10.0.1.10"}]}}})
+    with pytest.raises(ValueError):
+        labs.dnsmasq_conf({"services": {"dhcp": {"enabled": True, "pools": [{"name": "x", "start": "10.0.0.10", "end": "10.0.0.20"},
+                                                                          {"name": "x", "start": "10.0.1.10", "end": "10.0.1.20"}]}}})
+
+
+from app import l3
+
+
+def test_acl_parse_and_nft():
+    assert l3.entry_match("standard", "permit 192.168.1.0 0.0.0.255") == "ip saddr 192.168.1.0/24"
+    assert l3.entry_match("standard", "deny 10.0.0.5") == "ip saddr 10.0.0.5"
+    assert l3.entry_match("extended", "deny tcp any host 10.0.0.1 eq telnet") == "meta l4proto 6 ip daddr 10.0.0.1 tcp dport 23"
+    assert l3.entry_match("extended", "permit udp 10.0.0.0 0.0.255.255 any range 1000 2000") == "meta l4proto 17 ip saddr 10.0.0.0/16 udp dport 1000-2000"
+    assert l3.entry_match("extended", "permit tcp any any eq www 443 established") == "meta l4proto 6 tcp dport { 80, 443 } tcp flags & (ack | rst) != 0"
+    assert l3.entry_match("extended", "permit icmp any any echo-reply") == "meta l4proto 1 icmp type 0"
+    assert l3.entry_match("extended", "permit ip 10.0.1.0 0.0.254.255 any") == "ip saddr & 255.255.1.0 == 10.0.1.0"
+    assert l3.entry_match("extended", "permit ospf any any") == "meta l4proto 89"
+    for bad in ("permit tcp any", "allow ip any any", "permit tcp any any eq nope", "permit ip 10.0.0.0 any", "permit ip any any bogus"):
+        with pytest.raises(l3.AclError):
+            l3.parse_entry("extended", bad)
+    with pytest.raises(l3.AclError):
+        l3.acl_kind("250")
+    assert l3.acl_kind("10") == "standard" and l3.acl_kind("2100") == "extended" and l3.acl_kind("WEB") is None
+    assert l3.show_entry("standard", "permit 192.168.1.0 0.0.0.255") == "permit 192.168.1.0, wildcard bits 0.0.0.255"
+    acls = l3.add_entry({}, "1", "permit 10.0.0.0 0.255.255.255")
+    acls = l3.add_entry(acls, "1", "deny any")
+    acls = l3.add_entry(acls, "1", "permit host 1.1.1.1", seq=5)
+    assert [e["seq"] for e in acls["1"]["entries"]] == [5, 10, 20]
+    with pytest.raises(l3.AclError):
+        l3.add_entry(acls, "1", "permit host 2.2.2.2", seq=10)
+
+
+def test_l3_ruleset_and_config_lines():
+    props = {"acls": {"1": {"type": "standard", "entries": [{"seq": 10, "text": "permit 192.168.1.0 0.0.0.255"}]},
+                      "WEB": {"type": "extended", "entries": [{"seq": 10, "text": "remark web only"}, {"seq": 20, "text": "permit tcp any any eq 80"}]}},
+             "ifcfg": {"eth1": {"nat": "inside", "acl_in": "WEB", "helpers": ["10.20.0.5"]}, "eth2": {"nat": "outside", "acl_out": "MISSING"}},
+             "nat": {"pools": {"PUB": {"start": "203.0.113.10", "end": "203.0.113.20", "mask": "255.255.255.0"}},
+                     "rules": [{"type": "list", "acl": "1", "interface": "eth2", "overload": True},
+                               {"type": "static", "local": "192.168.1.10", "global": "203.0.113.5"},
+                               {"type": "static-port", "proto": "tcp", "local": "192.168.1.20", "lport": 80, "interface": "eth2", "gport": 8080}]}}
+    r = l3.ruleset(props, {"eth2": "203.0.113.2"})
+    assert 'iifname "eth1" jump f_WEB' in r and "acl:WEB:implicit" in r and "MISSING" not in r     # a missing ACL permits all, as on IOS
+    assert 'meta l4proto 6 tcp dport 80 counter return comment "acl:WEB:20"' in r and "remark" not in r
+    assert 'ip saddr 192.168.1.0/24 counter masquerade comment "nat:1:10"' in r
+    assert 'iifname "eth2" ip daddr 203.0.113.5 counter dnat to 192.168.1.10' in r
+    assert 'ip daddr 203.0.113.2 tcp dport 8080 counter dnat to 192.168.1.20:80' in r
+    assert l3.static_globals(props) == ["203.0.113.5"]
+    lines = l3.nat_lines(l3.normalise_nat(props["nat"]), {"eth2": "Gi0/0/1"}.get)
+    assert "ip nat inside source list 1 interface Gi0/0/1 overload" in lines and "ip nat pool PUB 203.0.113.10 203.0.113.20 netmask 255.255.255.0" in lines
+    assert "ip nat inside source static tcp 192.168.1.20 80 interface Gi0/0/1 8080" in lines
+    assert l3.iface_lines(props["ifcfg"]["eth1"]) == [" ip helper-address 10.20.0.5", " ip access-group WEB in", " ip nat inside"]
+    assert l3.acl_lines(l3.normalise_acls(props["acls"]))[:2] == ["access-list 1 permit 192.168.1.0 0.0.0.255", "!"]
+    args = l3.relay_args(props, {"eth1": "192.168.1.1"}, "/run/x.pid")
+    assert "--dhcp-relay=192.168.1.1,10.20.0.5" in args and "--interface=eth1" in args and "--port=0" in args
+    rows = l3.nat_translations("tcp      6 117 TIME_WAIT src=192.168.1.10 dst=8.8.8.8 sport=4000 dport=80 src=8.8.8.8 dst=203.0.113.2 sport=80 dport=4000 [ASSURED] mark=0 use=1", {})
+    assert rows == [{"pro": "tcp", "ig": "203.0.113.2:4000", "il": "192.168.1.10:4000", "ol": "8.8.8.8:80", "og": "8.8.8.8:80"}]
+    with pytest.raises(l3.AclError):
+        l3.normalise_nat({"pools": {"P": {"start": "10.0.0.20", "end": "10.0.0.10"}}})
+
+
+def test_router_ios_acl_nat_vrf_batch(client):
+    client.post("/api/labs", json={"name": "t-l3"})
+    lab = labs.load("t-l3")
+    lab["nodes"] = [{"id": "r1", "type": "router", "x": 0, "y": 0, "props": {"chassis": "router-3s"}}]
+    labs.save(lab)
+    r = asyncio.run(ios.run_batch(_FakeEnv("t-l3", "r1", _FakeIO()), [
+        "configure terminal", "access-list 1 permit 192.168.1.0 0.0.0.255", "access-list 1 deny any",
+        "ip access-list extended WEB", "permit tcp any host 10.0.0.1 eq 80", "15 deny ip any any", "no 15", "exit",
+        "vrf definition CUST", "rd 65000:1", "address-family ipv4", "route-target both 65000:1", "exit-address-family", "exit",
+        "interface Gi0/0/0", "ip nat inside", "ip access-group WEB in", "ip helper-address 10.20.0.5", "vrf forwarding CUST", "exit",
+        "interface Gi0/0/1", "ip nat outside", "exit",
+        "ip nat inside source list 1 interface Gi0/0/1 overload", "ip nat pool PUB 203.0.113.10 203.0.113.20 prefix-length 24",
+        "ip nat inside source static tcp 192.168.1.10 80 203.0.113.5 8080", "access-list 250 permit any", "end"]))
+    assert r["errors"] == ["access-list 250 permit any"], r
+    p = labs.load("t-l3")["nodes"][0]["props"]
+    assert [e["text"] for e in p["acls"]["WEB"]["entries"]] == ["permit tcp any host 10.0.0.1 eq 80"]
+    assert len(p["acls"]["1"]["entries"]) == 2
+    assert p["ifcfg"]["eth1"] == {"nat": "inside", "acl_in": "WEB", "helpers": ["10.20.0.5"], "vrf": "CUST"}
+    assert p["ifcfg"]["eth2"] == {"nat": "outside"}
+    assert p["vrfs"]["CUST"]["rd"] == "65000:1" and p["vrfs"]["CUST"]["import"] == ["65000:1"] and p["vrfs"]["CUST"]["table"] == 1001
+    assert p["nat"]["pools"]["PUB"]["mask"] == "255.255.255.0" and len(p["nat"]["rules"]) == 2
+    r = asyncio.run(ios.run_batch(_FakeEnv("t-l3", "r1", _FakeIO()), ["configure terminal", "no access-list 1", "no vrf definition CUST",
+                                                                       "interface Gi0/0/0", "no ip access-group WEB in", "end"]))
+    p = labs.load("t-l3")["nodes"][0]["props"]
+    assert "1" not in p["acls"] and "CUST" not in p["vrfs"] and p["ifcfg"]["eth1"] == {"nat": "inside", "helpers": ["10.20.0.5"]}

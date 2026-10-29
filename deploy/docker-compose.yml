@@ -1,29 +1,51 @@
-# netlab on FLT-NETLAB-01.   Update:  docker compose pull && docker compose up -d
+# Patchyard. Installed and updated by deploy/install.sh; settings live in .env next to this file.
+#   Update:  docker compose pull && docker compose up -d
 #
-# Why it looks like this: netlab drives the HOST's Docker (lab devices are sibling
+# Why it looks like this: Patchyard drives the HOST's Docker (lab devices are sibling
 # containers), creates veths and tc qdiscs in their namespaces, and captures packets.
 # So it needs host networking, the host PID namespace, the Docker socket and privileges.
-# /opt/netlab is mounted at the SAME path because containerlab bind paths are resolved
-# by the host daemon. Labs keep running while this container restarts or updates.
+# The data folder is mounted at the SAME path inside and out, because containerlab bind
+# paths are resolved by the host's Docker daemon. Labs keep running while this restarts.
+name: patchyard
 services:
-  netlab:
-    image: ${NETLAB_IMAGE:?set NETLAB_IMAGE in .env, e.g. ghcr.io/<github-user>/netlab:latest}
-    container_name: netlab
+  patchyard:
+    image: ${PATCHYARD_IMAGE:-ghcr.io/liamlane/patchyard:latest}
+    container_name: patchyard
     restart: unless-stopped
     privileged: true
     network_mode: host
     pid: host
     cgroup: host
     environment:
-      NETLAB_DATA: /opt/netlab/labs
-      NETLAB_PORT: ${NETLAB_PORT:-8080}
+      PATCHYARD_HOME: ${PATCHYARD_HOME:-/opt/patchyard}
+      PATCHYARD_DATA: ${PATCHYARD_HOME:-/opt/patchyard}/labs
+      PATCHYARD_PORT: ${PATCHYARD_PORT:-8080}
+      PATCHYARD_UPDATE_CHECK: ${PATCHYARD_UPDATE_CHECK:-1}
+      PATCHYARD_BIND: ${PATCHYARD_BIND:-0.0.0.0}
+      PATCHYARD_SANDBOX: ${PATCHYARD_SANDBOX:-0}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - /opt/netlab:/opt/netlab                # labs, snapshots, settings, metrics history
+      - ${PATCHYARD_HOME:-/opt/patchyard}:${PATCHYARD_HOME:-/opt/patchyard}   # labs, snapshots, settings, metrics history
       - /home:/home                            # so .clab.yml imports from home folders keep their paths
       - /var/run/netns:/var/run/netns
-      - /var/lib/docker/containers:/var/lib/docker/containers
+      - ${PATCHYARD_DOCKER_ROOT:-/var/lib/docker}/containers:/var/lib/docker/containers
       - /lib/modules:/lib/modules:ro
+      - /etc/os-release:/host/etc/os-release:ro
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  # HTTPS (installer --domain): COMPOSE_PROFILES=https in .env turns this on
+  caddy:
+    image: caddy:2.8.4
+    profiles: ["https"]
+    container_name: patchyard-caddy
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ${PATCHYARD_HOME:-/opt/patchyard}/caddy/data:/data
+      - ${PATCHYARD_HOME:-/opt/patchyard}/caddy/config:/config
     logging:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }

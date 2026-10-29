@@ -5,9 +5,10 @@ still override the matching value (NETLAB_FRR_IMAGE etc.) for container deployme
 """
 import copy, json, os, threading
 from pathlib import Path
+from .env import env as env_get, home
 
-DATA = Path(os.environ.get("NETLAB_DATA", "/opt/netlab/labs"))
-FILE = Path(os.environ.get("NETLAB_SETTINGS", DATA.parent / "settings.json"))
+DATA = Path(env_get("DATA", f"{home()}/labs"))
+FILE = Path(env_get("SETTINGS", DATA.parent / "settings.json"))
 _LOCK = threading.Lock()
 
 DEFAULT_RULES = [
@@ -30,11 +31,18 @@ DEFAULTS = {
     "alerts": {"enabled": True, "grace_s": 120, "rules": DEFAULT_RULES},
     "notifications": {"toast_min_severity": "warning", "toast_resolved": True, "sound": False},
     "security": {"auth_enabled": False, "password_hash": "", "session_hours": 12},
+    # multi-user: default limits for non-admin users (0 = unlimited) and images they may pick
+    "users": {"quota": {"max_labs": 5, "max_running_labs": 1, "max_devices": 20, "device_memory_mb": 512, "device_cpus": 1.0},
+              "allowed_images": []},
+    # public hosting: unprivileged lab devices, a management network per lab, and no internet
+    # from labs except package downloads through Patchyard's proxy (users with 'internet' get full access)
+    "sandbox": {"enabled": False, "mgmt_pool": "172.30.0.0/16", "lab_prefix": 26, "proxy_port": 3128,
+                "proxy_allow": ["dl-cdn.alpinelinux.org"]},
 }
 ENV = {("lab_defaults", "frr_image"): "NETLAB_FRR_IMAGE", ("lab_defaults", "pc_image"): "NETLAB_PC_IMAGE",
        ("lab_defaults", "alpine_image"): "NETLAB_ALPINE_IMAGE", ("lab_defaults", "mgmt_network"): "NETLAB_MGMT_NETWORK",
        ("lab_defaults", "mgmt_subnet"): "NETLAB_MGMT_SUBNET", ("monitoring", "interval"): "NETLAB_METRICS_INTERVAL",
-       ("monitoring", "retention_hours"): "NETLAB_METRICS_RETENTION_H"}
+       ("monitoring", "retention_hours"): "NETLAB_METRICS_RETENTION_H", ("sandbox", "enabled"): "NETLAB_SANDBOX"}
 SEVERITIES = ["info", "warning", "critical"]
 RULE_TYPES = {
     "container_down": "Device stopped or missing", "link_down": "Link down (operational, not admin-down)",
@@ -65,9 +73,10 @@ def load() -> dict:
             _cache = _merge(DEFAULTS, raw)
         s = copy.deepcopy(_cache)
     for (sec, key), env in ENV.items():
-        if os.environ.get(env):
-            v = os.environ[env]
-            s[sec][key] = type(DEFAULTS[sec][key])(v) if not isinstance(DEFAULTS[sec][key], str) else v
+        v = env_get(env.replace("NETLAB_", "", 1))
+        if v:
+            d = DEFAULTS[sec][key]
+            s[sec][key] = (v.lower() in ("1", "true", "yes", "on")) if isinstance(d, bool) else (type(d)(v) if not isinstance(d, str) else v)
     return s
 
 
@@ -118,6 +127,24 @@ def validate(s: dict) -> dict:
     if len({r["id"] for r in rules}) != len(rules):
         raise ValueError("duplicate rule ids")
     s["alerts"]["rules"] = rules
+    q = s["users"]["quota"]
+    for k in ("max_labs", "max_running_labs", "max_devices", "device_memory_mb"):
+        q[k] = int(max(0, min(100000, int(q.get(k) or 0))))
+    q["device_cpus"] = max(0.0, min(64.0, float(q.get("device_cpus") or 0)))
+    if q["device_memory_mb"] and q["device_memory_mb"] < 128:
+        raise ValueError("device memory: at least 128 MB (0 = no limit)")
+    s["users"]["allowed_images"] = [str(x).strip()[:200] for x in s["users"].get("allowed_images") or [] if str(x).strip()][:50]
+    import ipaddress as _ip
+    sb = s["sandbox"]
+    sb["enabled"] = bool(sb["enabled"])
+    pool = _ip.ip_network(sb["mgmt_pool"], strict=True)
+    if pool.version != 4 or not pool.is_private:
+        raise ValueError("sandbox management pool must be a private IPv4 network")
+    sb["lab_prefix"] = int(sb["lab_prefix"])
+    if not pool.prefixlen < sb["lab_prefix"] <= 28:
+        raise ValueError("per-lab prefix must be longer than the pool's and at most /28")
+    sb["proxy_port"] = int(sb["proxy_port"])
+    sb["proxy_allow"] = [str(h).strip().lower() for h in sb.get("proxy_allow") or [] if str(h).strip()][:50]
     return s
 
 

@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api.js";
+import { systemInfo, missingFeatures } from "./sysinfo.js";
+import { labNameFor, me } from "./me.js";
 import { Modal, Icon } from "./ui.jsx";
 
 const MINI = {
@@ -10,6 +12,8 @@ const MINI = {
   "router-on-a-stick": { n: [[70, 0, "r"], [70, 42, "w"], [36, 84, "p"], [104, 84, "p"]], l: [[0, 1], [1, 2], [1, 3]] },
   "campus-stp": { n: [[78, -8, "r"], [78, 26, "w"], [40, 58, "w"], [116, 58, "w"], [16, 92, "p"], [56, 92, "p"], [100, 92, "p"], [140, 92, "s"]], l: [[0, 1], [1, 2], [1, 3], [2, 3], [2, 4], [2, 5], [3, 6], [3, 7]] },
   "campus-rstp-lacp": { n: [[78, -14, "r"], [46, 16, "w"], [110, 16, "w"], [46, 54, "w"], [110, 54, "w"], [30, 90, "p"], [78, 90, "p"], [130, 90, "s"]], l: [[0, 1], [1, 2], [1, 3], [1, 4], [2, 3], [2, 4], [3, 5], [4, 6], [4, 7]] },
+  "nat-acl-edge": { n: [[60, -14, "r"], [112, -14, "s"], [60, 20, "r"], [60, 54, "w"], [112, 54, "s"], [30, 90, "p"], [90, 90, "p"]], l: [[0, 1], [0, 2], [2, 3], [3, 4], [3, 5], [3, 6]] },
+  "dhcp-relay": { n: [[78, -10, "r"], [78, 30, "w"], [126, 30, "s"], [30, 80, "p"], [78, 80, "p"], [126, 80, "p"]], l: [[0, 1], [1, 2], [1, 3], [1, 4], [1, 5]] },
   "small-office": { n: [[60, -14, "r"], [112, -14, "s"], [60, 18, "f"], [60, 52, "w"], [112, 52, "s"], [20, 88, "p"], [60, 88, "p"], [100, 88, "p"]], l: [[0, 1], [0, 2], [2, 3], [3, 4], [3, 5], [3, 6], [3, 7]] },
   "firewall-edge": { n: [[78, -10, "r"], [130, -10, "s"], [78, 30, "f"], [130, 30, "s"], [78, 62, "w"], [50, 92, "p"], [106, 92, "p"]], l: [[0, 1], [0, 2], [2, 3], [2, 4], [4, 5], [4, 6]] },
   "isp-mpls": { n: [[78, -10, "r"], [40, 22, "r"], [62, 22, "r"], [94, 22, "r"], [116, 22, "r"], [24, 56, "r"], [50, 56, "r"], [70, 56, "r"], [86, 56, "r"], [106, 56, "r"], [132, 56, "r"], [24, 88, "p"], [50, 88, "p"], [70, 88, "p"], [86, 88, "p"], [106, 88, "p"], [132, 88, "p"]],
@@ -29,11 +33,13 @@ function MiniTopo({ id }) {
 
 function Templates({ notify, onOpenLab, close }) {
   const [list, setList] = useState([]);
+  const [sys, setSys] = useState(null);
+  useEffect(() => { systemInfo().then(setSys); }, []);
   const [names, setNames] = useState({});
   const [busy, setBusy] = useState("");
   useEffect(() => { api.templates().then(setList).catch((e) => notify(e.message, null, "bad")); }, [notify]);
   const create = async (t) => {
-    const name = (names[t.id] || t.id).trim();
+    const name = (names[t.id] || labNameFor(t.id)).trim();
     setBusy(t.id);
     try { await api.fromTemplate(t.id, name); notify(`Created ${name} from ${t.title}`, "Deploy it from the toolbar.", "ok"); close(); onOpenLab(name); }
     catch (e) { notify(e.message, null, "bad"); }
@@ -46,8 +52,9 @@ function Templates({ notify, onOpenLab, close }) {
           <MiniTopo id={t.id} />
           <h3>{t.title} <span className="hint">{t.devices} devices</span></h3>
           <p>{t.desc}</p>
+          {missingFeatures(sys, t.needs).length > 0 && <p className="warn-t">This host is missing {missingFeatures(sys, t.needs).map((f) => sys.features[f].missing.join("+")).join(", ")}: parts of this lab won't work (Settings → About).</p>}
           <div className="row">
-            <input placeholder={t.id} value={names[t.id] ?? ""} onChange={(e) => setNames({ ...names, [t.id]: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "") })} aria-label="New lab name" />
+            <input placeholder={labNameFor(t.id)} value={names[t.id] ?? ""} onChange={(e) => setNames({ ...names, [t.id]: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "") })} aria-label="New lab name" />
             <button className="primary" disabled={busy === t.id} onClick={() => create(t)}>{busy === t.id ? "Creating…" : "Create lab"}</button>
           </div>
         </div>
@@ -137,17 +144,17 @@ function Share({ lab, notify, onOpenLab, close, refreshLabs }) {
             <button disabled={busy} onClick={() => go(async () => { const r = await api.clone(lab.name, cname); notify(`Cloned to ${cname}`, r.warning || null, r.warning ? "warn" : "ok"); await refreshLabs(); close(); onOpenLab(cname); })}>Clone</button></div>
           <p className="hint">Copies the topology and every saved config into a new, independent lab.</p></section>
         <section><h3><Icon name="download" size={16} /> Export</h3>
-          <a className="btn" href={api.exportUrl(lab.name)} download>Download netlab-{lab.name}.zip</a>
+          <a className="btn" href={api.exportUrl(lab.name)} download>Download patchyard-{lab.name}.zip</a>
           <p className="hint">lab.json plus configs. Running router configs are saved first.</p></section>
       </>)}
-      <section><h3><Icon name="upload" size={16} /> Import a netlab zip</h3>
-        <div className="row"><input type="file" accept=".zip,application/zip" ref={file} onChange={(e) => !zname && setZname((e.target.files[0]?.name || "").replace(/^netlab-|\.zip$/g, "").toLowerCase().replace(/[^a-z0-9-]/g, "-").slice(0, 31))} />
+      <section><h3><Icon name="upload" size={16} /> Import a Patchyard (or netlab) zip</h3>
+        <div className="row"><input type="file" accept=".zip,application/zip" ref={file} onChange={(e) => !zname && setZname((e.target.files[0]?.name || "").replace(/^(netlab|patchyard)-|\.zip$/g, "").toLowerCase().replace(/[^a-z0-9-]/g, "-").slice(0, 31))} />
           <input placeholder="new lab name" value={zname} onChange={(e) => setZname(e.target.value.toLowerCase())} aria-label="Imported lab name" />
           <button disabled={busy || !zname} onClick={() => go(async () => { const f = file.current.files[0]; if (!f) throw new Error("choose a zip first"); await api.importZip(zname, f); notify(`Imported ${zname}`, null, "ok"); await refreshLabs(); close(); onOpenLab(zname); })}>Import</button></div></section>
-      <section><h3><Icon name="layers" size={16} /> Import a containerlab topology</h3>
-        <div className="row"><input placeholder="/home/fsec/gui-isp-lab-p2/isp-lab.clab.yml" value={path} onChange={(e) => setPath(e.target.value)} style={{ flex: 1 }} aria-label="Path on the server" />
+      {me()?.role !== "user" && <section><h3><Icon name="layers" size={16} /> Import a containerlab topology</h3>
+        <div className="row"><input placeholder="/home/you/lab/topology.clab.yml" value={path} onChange={(e) => setPath(e.target.value)} style={{ flex: 1 }} aria-label="Path on the server" />
           <button disabled={busy || !path} onClick={() => go(async () => { const l = await api.importClab(path); notify(`Imported ${l.name}`, null, "ok"); await refreshLabs(); close(); onOpenLab(l.name); })}>Import</button></div>
-        <p className="hint">A .clab.yml already on the netlab VM. Devices keep their own definitions and config files.</p></section>
+        <p className="hint">A .clab.yml already on the Patchyard host (admins only). Devices keep their own definitions and config files.</p></section>}
     </div>
   );
 }

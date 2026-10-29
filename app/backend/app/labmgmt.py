@@ -140,8 +140,8 @@ def export_zip(lab: dict) -> bytes:
         z.writestr("lab.json", json.dumps(lj, indent=2))
         for rel, txt in _collect(lab).items():
             z.writestr(rel, txt)
-        z.writestr("README.txt", f"netlab lab export: {lab['name']}\nExported {time.strftime('%Y-%m-%d %H:%M')}\n"
-                                 "Import it from the netlab Lab manager (Import zip).\n")
+        z.writestr("README.txt", f"Patchyard lab export: {lab['name']}\nExported {time.strftime('%Y-%m-%d %H:%M')}\n"
+                                 "Import it from the Patchyard Lab manager (Import zip).\n")
     return buf.getvalue()
 
 
@@ -156,7 +156,7 @@ def import_zip(name: str, data: bytes) -> dict:
     except zipfile.BadZipFile:
         raise ValueError("not a zip file")
     if "lab.json" not in z.namelist():
-        raise ValueError("zip has no lab.json (export it from netlab)")
+        raise ValueError("zip has no lab.json (export it from Patchyard)")
     lab = json.loads(z.read("lab.json"))
     root = lab_dir(name).resolve()
     total = 0

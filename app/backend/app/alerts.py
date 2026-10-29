@@ -240,14 +240,21 @@ def _rows(q, args=()):
     return rows
 
 
-def list_alerts(state: str = "", limit: int = 200):
+def _mine(rows, only):
+    return rows if only is None else [r for r in rows if r.get("lab") in only]
+
+
+def list_alerts(state: str = "", limit: int = 200, only: set | None = None):
+    """only: the labs the caller may see (None = all, for admins)."""
     if state in ("firing", "resolved"):
-        return _rows("SELECT * FROM alerts WHERE state=? ORDER BY started DESC LIMIT ?", (state, limit))
-    return _rows("SELECT * FROM alerts ORDER BY (state='firing') DESC, started DESC LIMIT ?", (limit,))
+        rows = _rows("SELECT * FROM alerts WHERE state=? ORDER BY started DESC LIMIT ?", (state, limit if only is None else 5000))
+    else:
+        rows = _rows("SELECT * FROM alerts ORDER BY (state='firing') DESC, started DESC LIMIT ?", (limit if only is None else 5000,))
+    return _mine(rows, only)[:limit]
 
 
-def summary():
-    rows = _rows("SELECT severity, lab, node, acked FROM alerts WHERE state='firing'")
+def summary(only: set | None = None):
+    rows = _mine(_rows("SELECT severity, lab, node, acked FROM alerts WHERE state='firing'"), only)
     by_sev = {s: 0 for s in SEV}
     nodes: dict = {}
     for r in rows:
@@ -259,21 +266,30 @@ def summary():
     return {"firing": len(rows), "unacked": sum(by_sev.values()), "by_severity": by_sev, "nodes": nodes, "last_event": _eid}
 
 
-def events_after(eid: int):
-    return [e for e in EVENTS if e["eid"] > eid]
+def events_after(eid: int, only: set | None = None):
+    return [e for e in EVENTS if e["eid"] > eid and (only is None or e.get("lab") in only)]
 
 
-def ack(aid: int | None):
+def ack(aid: int | None, only: set | None = None):
     c = _db()
-    if aid is None:
+    if only is not None:
+        ids = [r["id"] for r in list_alerts("firing", 5000, only) if aid is None or r["id"] == aid]
+        c.executemany("UPDATE alerts SET acked=1 WHERE id=?", [(i,) for i in ids])
+    elif aid is None:
         c.execute("UPDATE alerts SET acked=1 WHERE state='firing'")
     else:
         c.execute("UPDATE alerts SET acked=1 WHERE id=?", (aid,))
     c.commit(); c.close()
 
 
-def clear_resolved():
+def clear_resolved(only: set | None = None):
     c = _db()
+    if only is not None:
+        ids = [r["id"] for r in list_alerts("resolved", 100000, only)]
+        n = len(ids)
+        c.executemany("DELETE FROM alerts WHERE id=?", [(i,) for i in ids])
+        c.commit(); c.close()
+        return n
     n = c.execute("DELETE FROM alerts WHERE state='resolved'").rowcount
     c.commit(); c.close()
     return n

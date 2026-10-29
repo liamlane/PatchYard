@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "./api.js";
 import { Icon, useInterval, fmtBps } from "./ui.jsx";
 
@@ -94,22 +94,61 @@ export function TrafficPanel({ lab, states, onClose, notify, preset }) {
   );
 }
 
+const BRAND = <div className="brand"><svg width="26" height="26" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="3" /><circle cx="19" cy="5" r="3" /><circle cx="19" cy="19" r="3" /><path d="M7.6 10.6l8.8-4.2M7.6 13.4l8.8 4.2" /></svg>Patchyard</div>;
+
 export function Login({ onDone }) {
+  const [user, setUser] = useState("");
   const [pw, setPw] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
   const go = async (e) => {
     e.preventDefault(); setBusy(true); setErr("");
-    try { await api.login(pw); onDone(); } catch (x) { setErr(x.message); }
+    try { await api.login(user.trim().toLowerCase(), pw); onDone(); } catch (x) { setErr(x.message); }
     setBusy(false);
   };
   return (
     <div className="login">
       <form className="login-card" onSubmit={go}>
-        <div className="brand"><svg width="26" height="26" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="3" /><circle cx="19" cy="5" r="3" /><circle cx="19" cy="19" r="3" /><path d="M7.6 10.6l8.8-4.2M7.6 13.4l8.8 4.2" /></svg>netlab</div>
-        <label className="col">Password<input type="password" autoFocus value={pw} onChange={(e) => setPw(e.target.value)} autoComplete="current-password" /></label>
+        {BRAND}
+        <label className="col">Username<input autoFocus value={user} onChange={(e) => setUser(e.target.value)} autoComplete="username" autoCapitalize="none" /></label>
+        <label className="col">Password<input type="password" value={pw} onChange={(e) => setPw(e.target.value)} autoComplete="current-password" /></label>
         {err && <p className="error">{err}</p>}
         <button className="primary big" disabled={busy || !pw}>Sign in</button>
+        <p className="hint">No account? Ask whoever runs this server for an invite link.</p>
+      </form>
+    </div>
+  );
+}
+
+export function InvitePage({ token }) {
+  const [state, setState] = useState(null);
+  const [f, setF] = useState({ username: "", password: "", again: "" });
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { api.inviteCheck(token).then((r) => setState(r)).catch((e) => setState({ error: e.message })); }, [token]);
+  const okName = /^[a-z][a-z0-9_-]{2,23}$/.test(f.username);
+  const go = async (e) => {
+    e.preventDefault(); setBusy(true); setErr("");
+    try { await api.inviteRedeem(token, { username: f.username, password: f.password }); location.href = "/"; } catch (x) { setErr(x.message); }
+    setBusy(false);
+  };
+  return (
+    <div className="login">
+      <form className="login-card" onSubmit={go}>
+        {BRAND}
+        {!state && <p className="hint">Checking your invite…</p>}
+        {state?.error && <><p className="error">{state.error}</p><a href="/">Go to sign in</a></>}
+        {state?.ok && <>
+          <h3>Create your account</h3>
+          <label className="col">Username<input autoFocus value={f.username} className={f.username && !okName ? "bad" : ""} autoComplete="username" autoCapitalize="none"
+            onChange={(e) => setF({ ...f, username: e.target.value.trim().toLowerCase() })} />
+            <span className="hint">3-24 characters: lowercase letters, digits, _ and -. Your labs are private to you.</span></label>
+          <label className="col">Password<input type="password" value={f.password} autoComplete="new-password" onChange={(e) => setF({ ...f, password: e.target.value })} />
+            <span className="hint">At least 10 characters.</span></label>
+          <label className="col">Repeat password<input type="password" value={f.again} autoComplete="new-password" onChange={(e) => setF({ ...f, again: e.target.value })} /></label>
+          {err && <p className="error">{err}</p>}
+          <button className="primary big" disabled={busy || !okName || f.password.length < 10 || f.password !== f.again}>Create account</button>
+        </>}
       </form>
     </div>
   );

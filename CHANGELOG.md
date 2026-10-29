@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.12.0
+**netlab is now Patchyard**, published for anyone to install (personal and non-commercial use, see LICENSE).
+
+- **Multi-user, for hosting on a public server** ([docs/vps.md](docs/vps.md)):
+  - accounts with admin/user roles, created from **invite links** (Admin → Invites);
+  - username + password login with throttling, sessions revoked on password change or disable;
+  - every lab has an owner: users see and change only their own labs (others answer 404), and admins see all and can move or mark labs trusted;
+  - **limits** per user: labs, labs running at once, devices per lab, memory and CPU per device (server defaults plus per-user overrides);
+  - **Admin panel** (your name, top right): users (role, reset password, disable, delete with their labs, lab internet), invites, all labs, limits and sandbox;
+  - **account menu**: change password, sign out.
+- **Lab sandbox** (`install.sh --public`):
+  - lab devices run unprivileged (only `NET_ADMIN`/`NET_RAW`) with memory/CPU caps, and sysctls are set from outside;
+  - each lab gets its own management network (`py-<lab>`, a /26 from 172.30.0.0/16);
+  - a host nftables table stops lab devices reaching the internet or the host, except **package mirrors through a built-in proxy** (Alpine by default), unless an admin gives a user full lab internet;
+  - users can't import from the server's disk, set raw containerlab options or pick unlisted images.
+- **HTTPS** with `install.sh --domain NAME --email ADDR`: Caddy with Let's Encrypt; Patchyard listens on localhost. The installer also creates the named admin account (`--admin NAME`).
+- Host bridges in the MPLS L3VPN template are named per lab, so two copies of it can run side by side.
+
+- **Router access lists**: standard and extended, numbered (1-99, 100-199, 1300-1999, 2000-2699) and named, from the IOS CLI (`access-list`, `ip access-list`, sequence numbers, `remark`, `no <seq>`) and the Config tab (Security & NAT → Access lists, with an entry builder).
+  - `ip access-group` in/out.
+  - `show access-lists` / `show ip access-lists` with match counts, `clear access-list counters`.
+  - Stateless with an implicit deny, like IOS: `established` works, and denied packets get ICMP administratively-prohibited ("U" in a ping).
+- **Router NAT**: `ip nat inside`/`outside`; PAT (`ip nat inside source list N interface X overload`); pools with or without overload; static one-to-one and static port NAT (to an address or `interface X`).
+  - `show ip nat translations`, `show ip nat statistics`, `clear ip nat translation *`.
+  - The router answers ARP for static global addresses.
+  - A NAT page in the Config tab.
+- **DHCP relay**: `ip helper-address` on router interfaces and subinterfaces. Servers have **multiple DHCP pools** (one per subnet, each with its own gateway, DNS and TFTP), so one server can serve every VLAN. Older single-pool settings are migrated automatically.
+- **VRFs from the IOS CLI** and a VRFs page: `vrf definition` / `ip vrf`, `rd`, `route-target import/export/both`, `vrf forwarding` (removes the interface address, like IOS), `show vrf`. RD/RTs are pushed into FRR's `router bgp N vrf X`.
+- Interface pages in the router Config tab get VRF, ACL in/out, NAT side and DHCP relay settings.
+- **Templates**: NAT and ACLs at the edge (CCNA-style branch router), Central DHCP with relay (router-on-a-stick, pools per VLAN). 12 templates in total.
+- **Install anywhere**:
+  - `deploy/install.sh` installs Docker, kernel modules and Patchyard on Ubuntu/Debian (tested), with best-effort support for Fedora/RHEL/Arch. It creates an admin account (login on by default), and is safe to re-run.
+  - Also new: `update.sh`, `uninstall.sh`, `tools/patchyard-preflight.sh`, `docs/install.md` and `docs/proxmox.md`.
+- **Host capabilities** (Settings → About; `GET /api/system`): which features this host's kernel supports. Templates that need a missing feature are flagged, and so is the Open vSwitch engine.
+- **Update check**: Settings → About shows when a newer GitHub release is out. Tagged versions publish a GitHub release with notes and the installer.
+- **Rename and migration**:
+  - The container, image (`ghcr.io/liamlane/patchyard`), data folder (`/opt/patchyard`) and environment variables (`PATCHYARD_*`) are renamed. `NETLAB_*` still works.
+  - Existing installs migrate in place on the next `install.sh` or `update.sh`: `/opt/netlab` moves, and a symlink is left behind.
+- The app image adds nftables, conntrack and dnsmasq (router ACL/NAT/relay).
+
 ## 0.11.0
 - **Config tab, Packet Tracer style** for routers, switches, firewalls, PCs and servers: a section list (Global / Routing / Switching / Interfaces / …) with one page per item, current values read back from the device (running config, or the saved config when it's off), inline validation (addresses, masks), live port status and neighbour on every interface page.
   - Routers: settings + write memory, static routes, OSPF (router ID, per-interface areas, redistribute, default route), BGP (neighbours, networks, redistribute), MPLS/LDP per interface, interface pages (address/mask, description, OSPF area/cost/passive, MPLS, subinterfaces, loopbacks).

@@ -1,18 +1,19 @@
 """netlab API + static web UI."""
-import asyncio, logging, os, re
+import asyncio, logging, re, secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
+from .env import env
 from fastapi import FastAPI, HTTPException, WebSocket, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
-from . import labs, devices, metrics, monitor, impair, labmgmt, templates, settings, alerts, live, traffic, auth, hardware, reach, cfgstate
+from . import labs, devices, metrics, monitor, impair, labmgmt, templates, settings, alerts, live, traffic, auth, hardware, reach, cfgstate, l3, system, users, sandbox, proxy
 from .version import VERSION, COMMIT
 from .capture import capture_for
 from .console import console
 from .util import run, check_name, container_states, cname
 
 logging.basicConfig(level=logging.INFO)
-app = FastAPI(title="netlab", version=VERSION)
+app = FastAPI(title="Patchyard", version=VERSION)
 app.add_middleware(auth.AuthMiddleware)
 LOCKS: dict[str, asyncio.Lock] = {}
 
@@ -41,12 +42,28 @@ async def lifespan(_app):
     for m in ("mpls_router", "mpls_iptunnel", "vrf", "8021q", "bridge", "sch_netem", "dummy", "openvswitch"):
         await run("modprobe", m)
     tasks = []
-    if os.environ.get("NETLAB_METRICS", "1") != "0":
+    if env("METRICS", "1") != "0":
         alerts.restore_active()
         tasks = [asyncio.create_task(metrics.collector()), asyncio.create_task(alerts.health_loop())]
+        tasks.append(asyncio.create_task(_restore_l3()))
+        await proxy.start()
+        fw = await sandbox.refresh_firewall()
+        if fw:
+            logging.getLogger("patchyard").error("lab firewall: %s", fw)
     yield
+    await proxy.stop()
     for t in tasks:
         t.cancel()
+
+
+async def _restore_l3():
+    """DHCP relays run from the app; after an app restart, start them again for running labs."""
+    await asyncio.sleep(5)
+    for item in labs.list_labs():
+        try:
+            await l3.reapply_all(labs.load(item["name"]))
+        except Exception as e:  # noqa: BLE001 - one bad lab mustn't stop the others
+            logging.getLogger("netlab").warning("l3 restore %s: %s", item["name"], e)
 
 
 app.router.lifespan_context = lifespan
@@ -60,19 +77,73 @@ def node_of(lab: dict, nid: str) -> dict:
 
 
 # ---------------- labs ----------------
+def _visible(items):
+    me = auth.current()
+    fa = auth.first_admin()
+    for i in items:
+        i["owner"] = i.get("owner") or fa
+    return items if me["role"] == "admin" else [i for i in items if i["owner"] == me["name"]]
+
+
+def my_labs() -> set | None:
+    """Labs the caller may see; None = all (admins)."""
+    if auth.is_admin():
+        return None
+    return {i["name"] for i in _visible(labs.list_labs())}
+
+
+def quota_new_lab(owner: str | None = None):
+    owner = owner or auth.current()["name"]
+    q = users.quota(owner)
+    if q["max_labs"]:
+        mine = sum(1 for i in _visible(labs.list_labs()) if i["owner"] == owner)
+        if mine >= q["max_labs"]:
+            raise HTTPException(403, f"you have {mine} labs, the limit is {q['max_labs']}: delete one first")
+
+
+def quota_devices(lab: dict):
+    q = users.quota(lab.get("owner") or auth.first_admin())
+    if q["max_devices"] and len(lab.get("nodes", [])) > q["max_devices"]:
+        raise HTTPException(403, f"a lab can have at most {q['max_devices']} devices on this server")
+
+
+async def quota_running(lab: dict):
+    owner = lab.get("owner") or auth.first_admin()
+    q = users.quota(owner)
+    if not q["max_running_labs"]:
+        return
+    from . import netinfo
+    running = {l for (l, _n), c in (await netinfo.containers()).items() if c["state"] == "running"}
+    mine = {i["name"] for i in labs.list_labs() if (i.get("owner") or auth.first_admin()) == owner}
+    busy = (running & mine) - {lab["name"]}
+    if len(busy) >= q["max_running_labs"]:
+        raise HTTPException(403, f"you can run {q['max_running_labs']} lab(s) at a time: destroy {', '.join(sorted(busy))} first")
+
+
+def own_new(lab_name: str, owner: str | None = None):
+    """Stamp the owner on a lab that was just created."""
+    d = labs.load(lab_name)
+    d["owner"] = owner or auth.current()["name"]
+    labs.save(d)
+    return d
+
+
 @app.get("/api/labs")
 async def api_list():
-    return labs.list_labs()
+    return _visible(labs.list_labs())
 
 
 @app.post("/api/labs")
 async def api_create(body: dict):
-    return labs.create(check_name(body["name"]))
+    quota_new_lab()
+    labs.create(check_name(body["name"]))
+    return own_new(body["name"])
 
 
 @app.post("/api/labs/import")
 async def api_import(body: dict):
-    return labs.import_clab(body["path"])
+    d = labs.import_clab(body["path"])
+    return own_new(d["name"])
 
 
 @app.get("/api/labs/{lab}")
@@ -85,9 +156,14 @@ async def api_put(lab: str, body: dict):
     if body.get("name") != lab:
         raise HTTPException(400, "lab name mismatch")
     old = labs.load(lab)
-    for k in ("workdir", "imported_from", "raw_kinds", "mgmt_network", "mgmt_subnet", "template", "cloned_from"):
+    for k in ("workdir", "imported_from", "raw_kinds", "mgmt_network", "mgmt_subnet", "template", "cloned_from",
+              "owner", "trusted", "sandbox_subnet"):
+        body.pop(k, None)
         if k in old:
             body[k] = old[k]
+    if not auth.is_admin():
+        _check_user_lab(body, old)
+    quota_devices(body)
     # props changed on the server (IOS CLI, power) after the copy the browser edited win
     seen = int(body.pop("_rev", 0) or 0)
     newer = {n for (l, n), r in labs.NODE_REV.items() if l == lab and r > seen}
@@ -98,6 +174,21 @@ async def api_put(lab: str, body: dict):
                 n["props"] = oldp[n["id"]]
     labs.save(body)
     return {"ok": True, **labs.rev_info(lab)}
+
+
+def _check_user_lab(new: dict, old: dict | None):
+    """What a normal user may not do to a lab: change imported (raw) device definitions or pick other images."""
+    images = sandbox.allowed_images()
+    oldraw = {n["id"]: n.get("raw") for n in (old or {}).get("nodes", [])}
+    for n in new.get("nodes", []):
+        if n.get("raw") and n.get("raw") != oldraw.get(n["id"]):
+            try:
+                sandbox.check_raw(n["raw"], n["id"], images)
+            except ValueError as e:
+                raise HTTPException(403, str(e))
+        img = (n.get("props") or {}).get("image")
+        if img and img not in images:
+            raise HTTPException(403, f"{n['id']}: image {img} isn't on this server's allowed list")
 
 
 @app.delete("/api/labs/{lab}")
@@ -123,6 +214,16 @@ async def api_deploy(lab: str):
             if (n.get("props") or {}).get("power"):
                 labs.patch_props(lab, n["id"], lambda pr: pr.pop("power", None))
         d = labs.load(lab)
+        quota_devices(d)
+        await quota_running(d)
+        d = labs.ensure_subnet(d)
+        if sandbox.active(d):
+            bad = [b for b in labs.bridges(d) if not b.startswith(labs.bridge_prefix(d))]
+            if bad:
+                raise HTTPException(400, f"host bridges must be named {labs.bridge_prefix(d)}… on this server: {', '.join(bad)}")
+            fw = await sandbox.refresh_firewall()
+            if fw:
+                raise HTTPException(500, f"lab firewall: {fw}")
         p = labs.generate(d)
         for br in labs.bridges(d):
             rc, _, _ = await run("ip", "link", "show", br)
@@ -135,6 +236,9 @@ async def api_deploy(lab: str):
         rc, out, err = await run("containerlab", "deploy", "-t", str(p), "--reconfigure",
                                  cwd=str(labs.workdir(d)), timeout=900)
         notes = await impair.reapply_all(d) if rc == 0 else []
+        if rc == 0:
+            notes += await sandbox.fixups(d)
+            notes += await l3.reapply_all(d)
         tail = ("\n" + "\n".join(notes)) if notes else ""
         return {"ok": rc == 0, "saved_configs": saved["saved"], "save_failed": saved["failed"], "output": (out + err)[-8000:] + tail}
 
@@ -150,6 +254,9 @@ async def api_destroy(lab: str):
             labs.generate(d)
         rc, out, err = await run("containerlab", "destroy", "-t", str(p), "--cleanup",
                                  cwd=str(labs.workdir(d)), timeout=600)
+        l3.stop_lab(lab)
+        if sandbox.enabled():
+            await run("docker", "network", "rm", f"py-{lab}")
         for n in d["nodes"]:                    # nothing is "powered off" in a destroyed lab
             if (n.get("props") or {}).get("power"):
                 labs.patch_props(lab, n["id"], lambda pr: pr.pop("power", None))
@@ -232,7 +339,7 @@ async def api_switch(lab: str, node: str, body: dict):
     d = labs.load(lab)
     n = node_of(d, node)
     if n["type"] != "switch" or n.get("raw"):
-        raise HTTPException(400, "VLAN config is only available on netlab switches")
+        raise HTTPException(400, "VLAN config is only available on Patchyard switches")
     props = n.setdefault("props", {})
     prio = int(body.get("stp_priority") or 32768)
     if not 0 <= prio <= 61440 or prio % 4096:
@@ -257,7 +364,7 @@ async def api_subif(lab: str, node: str, body: dict):
     d = labs.load(lab)
     n = node_of(d, node)
     if n["type"] != "router" or n.get("raw"):
-        raise HTTPException(400, "subinterfaces are only available on netlab routers")
+        raise HTTPException(400, "subinterfaces are only available on Patchyard routers")
     parent, vlan, add = body["parent"], labs.vlan_id(body["vlan"]), body.get("action", "add") == "add"
     hit = next((s for s in n.setdefault("props", {}).get("subifs", []) if s["parent"] == parent and int(s["vlan"]) == vlan), None)
     name = labs.subif_name(hit or {"parent": parent, "vlan": vlan})
@@ -418,7 +525,12 @@ async def api_templates():
 
 @app.post("/api/templates/{tid}")
 async def api_template_create(tid: str, body: dict):
-    return await asyncio.to_thread(templates.create, tid, check_name(body.get("name", "")))
+    quota_new_lab()
+    me = auth.current()["name"]
+    d = await asyncio.to_thread(templates.create, tid, check_name(body.get("name", "")))
+    d = own_new(d["name"], me)
+    quota_devices(d)
+    return d
 
 
 @app.get("/api/labs/{lab}/snapshots")
@@ -463,9 +575,17 @@ async def api_snap_delete(lab: str, sid: str):
 
 @app.post("/api/labs/{lab}/clone")
 async def api_clone(lab: str, body: dict):
+    quota_new_lab()
     d = labs.load(lab)
     await devices.save_configs(d)
-    return labmgmt.clone(d, check_name(body.get("name", "")))
+    c = labmgmt.clone(d, check_name(body.get("name", "")))
+    nd = labs.load(c["lab"]["name"])
+    nd.pop("sandbox_subnet", None)
+    if not auth.is_admin():
+        nd.pop("trusted", None)
+    labs.save(nd)
+    c["lab"] = own_new(nd["name"])
+    return c
 
 
 @app.get("/api/labs/{lab}/export")
@@ -474,105 +594,247 @@ async def api_export(lab: str):
     await devices.save_configs(d)
     data = labmgmt.export_zip(d)
     return Response(data, media_type="application/zip",
-                    headers={"Content-Disposition": f'attachment; filename="netlab-{lab}.zip"'})
+                    headers={"Content-Disposition": f'attachment; filename="patchyard-{lab}.zip"'})
 
 
 @app.post("/api/labs/import-zip")
 async def api_import_zip(name: str, request: Request):
-    return labmgmt.import_zip(check_name(name), await request.body())
+    quota_new_lab()
+    d = labmgmt.import_zip(check_name(name), await request.body())
+    if not auth.is_admin():
+        try:
+            for k in ("trusted", "workdir", "imported_from"):
+                d.pop(k, None)
+            _check_user_lab(d, None)
+            quota_devices(d)
+        except HTTPException:
+            labs.delete(d["name"])
+            raise
+    d.pop("sandbox_subnet", None)
+    labs.save(d)
+    return own_new(d["name"])
 
 
 # ---------------- version, settings, auth ----------------
 @app.get("/api/version")
 async def api_version():
-    return {"version": VERSION, "commit": COMMIT}
+    return {"version": VERSION, "commit": COMMIT, "name": "Patchyard"}
+
+
+@app.get("/api/system")
+async def api_system():
+    caps = await system.capabilities()
+    if not auth.is_admin():            # users only need to know which features work
+        caps = {"features": caps["features"]}
+    caps["sandbox"] = sandbox.enabled()
+    return caps
+
+
+@app.get("/api/system/update")
+async def api_update(force: bool = False):
+    return await system.update_check(force)
 
 
 @app.get("/api/settings")
 async def api_settings():
     s = settings.public()
-    s["_meta"] = {"rule_types": settings.RULE_TYPES, "severities": settings.SEVERITIES, "data": str(settings.DATA), "version": VERSION}
+    s["_meta"] = {"rule_types": settings.RULE_TYPES, "severities": settings.SEVERITIES, "data": str(settings.DATA), "version": VERSION,
+                  "admin": auth.is_admin()}
+    if not auth.is_admin():          # users see what the UI needs, not the server's internals
+        s = {k: v for k, v in s.items() if k in ("general", "lab_defaults", "notifications", "_meta")}
+        s["_meta"]["data"] = ""
     return s
 
 
 @app.put("/api/settings")
 async def api_settings_put(body: dict):
     body.pop("_meta", None)
-    return settings.save(body)
+    was = settings.get("sandbox.enabled")
+    r = settings.save(body)
+    if settings.get("sandbox.enabled") != was:
+        await (proxy.start() if settings.get("sandbox.enabled") else proxy.stop())
+        await sandbox.refresh_firewall()
+    return r
 
 
 @app.get("/api/auth/state")
 async def api_auth_state(request: Request):
-    return {"enabled": auth.enabled(), "logged_in": auth.valid_session(request.cookies.get(auth.COOKIE)),
-            "password_set": bool(settings.load()["security"]["password_hash"])}
+    who = auth.session_user(request.cookies.get(auth.COOKIE)) if auth.enabled() else auth.current()
+    return {"enabled": auth.enabled(), "logged_in": who is not None, "user": who,
+            "multi_user": len(users.all_users()) > 1, "sandbox": sandbox.enabled()}
 
 
-def _set_cookie(resp: JSONResponse, request: Request):
-    tok, age = auth.make_session()
-    resp.set_cookie(auth.COOKIE, tok, max_age=age, httponly=True, samesite="lax",
-                    secure=request.headers.get("x-forwarded-proto") == "https")
+def _set_cookie(resp: JSONResponse, request: Request, name: str):
+    tok, age = auth.make_session(name)
+    resp.set_cookie(auth.COOKIE, tok, max_age=age, httponly=True, samesite="lax", path="/",
+                    secure=request.headers.get("x-forwarded-proto") == "https" or request.url.scheme == "https")
     return resp
+
+
+def _client_ip(request: Request) -> str:
+    # uvicorn --proxy-headers already swaps in X-Forwarded-For when the request came from the local proxy
+    return request.client.host if request.client else ""
 
 
 @app.post("/api/auth/login")
 async def api_login(body: dict, request: Request):
-    stored = settings.load()["security"]["password_hash"]
-    if not stored or not auth.check_password(str(body.get("password", "")), stored):
+    name = str(body.get("username") or "").strip().lower() or auth.first_admin()
+    ip = _client_ip(request)
+    if auth.throttled(f"ip:{ip}", limit=20) or auth.throttled(f"user:{name}"):
+        raise HTTPException(429, "too many failed logins: wait 15 minutes")
+    u = await asyncio.to_thread(users.verify, name, str(body.get("password", "")))
+    if not u:
+        auth.failed(f"ip:{ip}", f"user:{name}")
         await asyncio.sleep(1.0)
-        raise HTTPException(401, "wrong password")
-    return _set_cookie(JSONResponse({"ok": True}), request)
+        raise HTTPException(401, "wrong username or password")
+    users.touch_login(name)
+    return _set_cookie(JSONResponse({"ok": True, "user": {"name": name, "role": u.get("role", "user")}}), request, name)
 
 
 @app.post("/api/auth/logout")
 async def api_logout():
     r = JSONResponse({"ok": True})
-    r.delete_cookie(auth.COOKIE)
+    r.delete_cookie(auth.COOKIE, path="/")
     return r
 
 
 @app.post("/api/auth/password")
 async def api_password(body: dict, request: Request):
-    """Set or change the admin password and turn login on (or off with enable=false)."""
-    cur = settings.load()
-    stored = cur["security"]["password_hash"]
-    if stored and auth.enabled() and not auth.valid_session(request.cookies.get(auth.COOKIE)):
-        raise HTTPException(401, "login required")
-    if stored and not auth.check_password(str(body.get("current", "")), stored):
+    """Change your own password (or, on an install with no accounts yet, create the admin)."""
+    if not users.any_users():
+        u = users.create(str(body.get("username") or "admin"), str(body.get("new", "")), role="admin")
+        return _set_cookie(JSONResponse({"ok": True, "enabled": True}), request, u["name"])
+    me = auth.current()["name"]
+    if not await asyncio.to_thread(users.verify, me, str(body.get("current", ""))):
         raise HTTPException(403, "current password is wrong")
-    if body.get("enable") is False:
-        cur["security"]["auth_enabled"] = False
-        return settings.save(cur, keep_secret=False) and {"ok": True, "enabled": False}
-    new = str(body.get("new", ""))
-    if len(new) < 8:
-        raise HTTPException(400, "use at least 8 characters")
-    cur["security"]["password_hash"] = auth.hash_password(new)
-    cur["security"]["auth_enabled"] = True
-    settings.save(cur, keep_secret=False)
-    return _set_cookie(JSONResponse({"ok": True, "enabled": True}), request)
+    users.set_password(me, str(body.get("new", "")))
+    return _set_cookie(JSONResponse({"ok": True, "enabled": True}), request, me)
+
+
+@app.get("/api/invite/{token}")
+async def api_invite_check(token: str):
+    i = users.check_invite(token)
+    return {"ok": True, "role": i["role"], "expires": i["expires"]}
+
+
+@app.post("/api/invite/{token}")
+async def api_invite_redeem(token: str, body: dict, request: Request):
+    ip = _client_ip(request)
+    if auth.throttled(f"inv:{ip}", limit=10):
+        raise HTTPException(429, "too many attempts: wait 15 minutes")
+    try:
+        u = users.redeem(token, str(body.get("username", "")), str(body.get("password", "")))
+    except users.UserError:
+        auth.failed(f"inv:{ip}")
+        raise
+    users.touch_login(u["name"])
+    return _set_cookie(JSONResponse({"ok": True, "user": {"name": u["name"], "role": u["role"]}}), request, u["name"])
+
+
+# ---------------- admin: users, invites, all labs ----------------
+@app.get("/api/admin/users")
+async def api_admin_users():
+    from . import netinfo
+    ls = _visible(labs.list_labs())
+    running = {l for (l, _n), c in (await netinfo.containers()).items() if c["state"] == "running"}
+    out = []
+    for n, u in users.all_users().items():
+        mine = [l["name"] for l in ls if l["owner"] == n]
+        out.append({**users.public(n, u), "labs": len(mine), "running": sorted(set(mine) & running), "effective_quota": users.quota(n)})
+    return out
+
+
+@app.post("/api/admin/users")
+async def api_admin_user_create(body: dict):
+    pw = str(body.get("password") or "") or secrets.token_urlsafe(12)
+    u = users.create(str(body.get("username", "")), pw, role=str(body.get("role") or "user"), internet=bool(body.get("internet")))
+    return {**u, "password": pw}
+
+
+@app.patch("/api/admin/users/{name}")
+async def api_admin_user_update(name: str, body: dict):
+    kw = {k: body[k] for k in ("role", "disabled", "internet", "quota") if k in body}
+    if name == auth.current()["name"] and (kw.get("disabled") or kw.get("role") == "user"):
+        raise HTTPException(400, "you can't disable or demote yourself")
+    u = users.update(name, **kw)
+    if body.get("reset_password"):
+        pw = secrets.token_urlsafe(12)
+        users.set_password(name, pw)
+        u["password"] = pw
+    if "internet" in kw or "role" in kw:
+        await sandbox.refresh_firewall()
+    return u
+
+
+@app.delete("/api/admin/users/{name}")
+async def api_admin_user_delete(name: str, delete_labs: bool = False):
+    if name == auth.current()["name"]:
+        raise HTTPException(400, "you can't delete yourself")
+    owned = [l["name"] for l in _visible(labs.list_labs()) if l["owner"] == name]
+    if owned and not delete_labs:
+        raise HTTPException(409, f"{name} owns {len(owned)} lab(s): {', '.join(owned)}. Delete them too, or move them first.")
+    for l in owned:
+        if await container_states(l):
+            await api_destroy(l)
+        labs.delete(l)
+    users.delete(name)
+    return {"ok": True, "deleted_labs": owned}
+
+
+@app.post("/api/admin/labs/{lab}/owner")
+async def api_admin_lab_owner(lab: str, body: dict):
+    to = str(body.get("owner", ""))
+    if not users.get(to):
+        raise HTTPException(404, f"no user {to}")
+    d = labs.load(lab)
+    d["owner"] = to
+    if "trusted" in body:
+        d["trusted"] = bool(body["trusted"])
+    labs.save(d)
+    await sandbox.refresh_firewall()
+    return {"ok": True}
+
+
+@app.get("/api/admin/invites")
+async def api_admin_invites():
+    return users.list_invites()
+
+
+@app.post("/api/admin/invites")
+async def api_admin_invite_create(body: dict):
+    return users.create_invite(auth.current()["name"], role=str(body.get("role") or "user"),
+                               days=float(body.get("days") or 7), note=str(body.get("note") or ""))
+
+
+@app.delete("/api/admin/invites/{iid}")
+async def api_admin_invite_delete(iid: str):
+    users.revoke_invite(iid)
+    return {"ok": True}
 
 
 # ---------------- alerts ----------------
 @app.get("/api/alerts")
 async def api_alerts(state: str = "", limit: int = 200):
-    return await asyncio.to_thread(alerts.list_alerts, state, max(1, min(limit, 1000)))
+    return await asyncio.to_thread(alerts.list_alerts, state, max(1, min(limit, 1000)), my_labs())
 
 
 @app.get("/api/alerts/summary")
 async def api_alert_summary(after: int = 0):
-    s = await asyncio.to_thread(alerts.summary)
-    s["events"] = alerts.events_after(after)
+    only = my_labs()
+    s = await asyncio.to_thread(alerts.summary, only)
+    s["events"] = alerts.events_after(after, only)
     return s
 
 
 @app.post("/api/alerts/ack")
 async def api_alert_ack(body: dict):
-    await asyncio.to_thread(alerts.ack, int(body["id"]) if body.get("id") is not None else None)
+    await asyncio.to_thread(alerts.ack, int(body["id"]) if body.get("id") is not None else None, my_labs())
     return {"ok": True}
 
 
 @app.delete("/api/alerts/resolved")
 async def api_alert_clear():
-    return {"deleted": await asyncio.to_thread(alerts.clear_resolved)}
+    return {"deleted": await asyncio.to_thread(alerts.clear_resolved, my_labs())}
 
 
 @app.post("/api/labs/{lab}/nodes/{node}/rename-files")
@@ -600,7 +862,7 @@ async def api_firewall(lab: str, node: str, body: dict):
     d = labs.load(lab)
     n = node_of(d, node)
     if n["type"] != "firewall" or n.get("raw"):
-        raise HTTPException(400, "not a netlab firewall")
+        raise HTTPException(400, "not a Patchyard firewall")
     keep = {k: v for k, v in (n.get("props") or {}).items() if k not in firewall.DEFAULT}
     n["props"] = {**keep, **firewall.normalise(body)}
     labs.save(d)
@@ -706,7 +968,7 @@ async def api_node_ios(lab: str, node: str, body: dict):
     d = labs.load(lab)
     n = node_of(d, node)
     if n["type"] not in ("router", "switch") or n.get("raw"):
-        raise HTTPException(400, "IOS commands are for netlab routers and switches")
+        raise HTTPException(400, "IOS commands are for Patchyard routers and switches")
     cmds = [str(c) for c in body.get("commands", [])][:400]
     if n["type"] == "router" and (await container_states(lab)).get(node) != "running":
         raise HTTPException(409, "deploy the lab (and power the router on) to change its configuration")
@@ -775,7 +1037,7 @@ async def api_traffic_stop(lab: str, jid: str):
 
 
 # ---------------- static UI ----------------
-UI = Path(os.environ.get("NETLAB_UI", Path(__file__).resolve().parents[2] / "frontend" / "dist"))
+UI = Path(env("UI", Path(__file__).resolve().parents[2] / "frontend" / "dist"))
 if UI.exists():
     app.mount("/assets", StaticFiles(directory=UI / "assets"), name="assets")
 

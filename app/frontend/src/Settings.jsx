@@ -4,14 +4,15 @@ import { api } from "./api.js";
 import { Modal, Icon } from "./ui.jsx";
 
 const TABS = [["general", "General", "gear"], ["defaults", "Lab defaults", "layers"], ["monitoring", "Monitoring", "pulse"], ["alerts", "Alert rules", "flag"],
-  ["notifications", "Notifications", "bell"], ["appearance", "Appearance", "sun"], ["security", "Security", "keyboard"], ["about", "About & updates", "help"]];
+  ["notifications", "Notifications", "bell"], ["appearance", "Appearance", "sun"], ["security", "Account", "keyboard"], ["about", "About & updates", "help"]];
+const USER_TABS = [["appearance", "Appearance", "sun"], ["security", "Account", "keyboard"], ["about", "About", "help"]];
 const NEEDS_T = { cpu_high: "%", mem_high: "MB", link_util: "Mb/s", errors_rising: "per sample", drops_rising: "per sample", probe_loss: "% loss", probe_rtt: "ms" };
 
 function Field({ label, hint, children }) {
   return <label className="set-f"><span className="set-l">{label}</span><span className="set-c">{children}{hint && <span className="hint">{hint}</span>}</span></label>;
 }
 
-export default function Settings({ onClose, notify, labs, lab, appearance, onSaved, initial = "general" }) {
+export default function Settings({ onClose, notify, labs, lab, appearance, onSaved, initial = "general", me }) {
   const [tab, setTab] = useState(initial);
   const [s, setS] = useState(null);
   const [dirty, setDirty] = useState(false);
@@ -19,8 +20,11 @@ export default function Settings({ onClose, notify, labs, lab, appearance, onSav
   useEffect(() => { api.settings().then(setS).catch((e) => notify(e.message, null, "bad")); }, [notify]);
   if (!s) return <Modal title="Settings" onClose={onClose} wide><p className="hint">Loading…</p></Modal>;
   const meta = s._meta || {};
+  const admin = meta.admin !== false;
+  const tabs = admin ? TABS : USER_TABS;
+  if (!tabs.some(([k]) => k === tab)) setTab(tabs[0][0]);
   const upd = (sec, k, v) => { setS({ ...s, [sec]: { ...s[sec], [k]: v } }); setDirty(true); };
-  const rules = s.alerts.rules;
+  const rules = s.alerts?.rules || [];
   const setRule = (i, k, v) => { const r = rules.map((x, j) => (j === i ? { ...x, [k]: v } : x)); upd("alerts", "rules", r); };
   const save = async () => {
     setBusy(true);
@@ -28,15 +32,15 @@ export default function Settings({ onClose, notify, labs, lab, appearance, onSav
     catch (e) { notify(`Settings not saved: ${e.message}`, null, "bad"); }
     setBusy(false);
   };
-  const footer = (<>
+  const footer = admin ? (<>
     {dirty && <span className="hint grow">Unsaved changes</span>}
     <button onClick={onClose}>Close</button>
     <button className="primary" disabled={!dirty || busy} onClick={save}>Save settings</button>
-  </>);
+  </>) : <button onClick={onClose}>Close</button>;
   return (
     <Modal title="Settings" onClose={onClose} xwide footer={footer}>
       <div className="settings">
-        <nav className="set-nav">{TABS.map(([k, l, i]) => <button key={k} className={tab === k ? "on" : ""} onClick={() => setTab(k)}><Icon name={i} size={16} />{l}</button>)}</nav>
+        <nav className="set-nav">{tabs.map(([k, l, i]) => <button key={k} className={tab === k ? "on" : ""} onClick={() => setTab(k)}><Icon name={i} size={16} />{l}</button>)}</nav>
         <div className="set-body">
           {tab === "general" && (<>
             <h3>General</h3>
@@ -125,7 +129,7 @@ export default function Settings({ onClose, notify, labs, lab, appearance, onSav
             <Field label="Port labels"><input type="checkbox" checked={appearance.showIf} onChange={(e) => appearance.setShowIf(e.target.checked)} /></Field>
             <Field label="Snap to grid"><input type="checkbox" checked={appearance.snap} onChange={(e) => appearance.setSnap(e.target.checked)} /></Field>
           </>)}
-          {tab === "security" && <Security s={s} notify={notify} />}
+          {tab === "security" && <Security s={s} notify={notify} me={me} />}
           {tab === "about" && <About meta={meta} />}
         </div>
       </div>
@@ -133,40 +137,67 @@ export default function Settings({ onClose, notify, labs, lab, appearance, onSav
   );
 }
 
-function Security({ s, notify }) {
+function Security({ s, notify, me }) {
   const [cur, setCur] = useState("");
   const [pw, setPw] = useState("");
   const [pw2, setPw2] = useState("");
-  const set = s.security.password_set;
-  const go = async (body, msg) => {
-    try { await api.setPassword(body); notify(msg, null, "ok"); setCur(""); setPw(""); setPw2(""); setTimeout(() => location.reload(), 600); }
+  const [busy, setBusy] = useState(false);
+  const go = async () => {
+    setBusy(true);
+    try { await api.setPassword({ current: cur, new: pw }); notify("Password changed", "Other sessions of this account were signed out.", "ok"); setCur(""); setPw(""); setPw2(""); }
     catch (e) { notify(e.message, null, "bad"); }
+    setBusy(false);
   };
   return (<>
-    <h3>Security</h3>
-    <p className="hint">netlab runs as root and drives Docker, so anyone who reaches it controls the VM. Turn on a login, and still publish it only through NPM with Authentik.</p>
-    <div className={`secstate ${s.security.auth_enabled ? "on" : ""}`}><Icon name={s.security.auth_enabled ? "flag" : "help"} />{s.security.auth_enabled ? "Login is ON" : "Login is OFF — anyone on the network can use netlab"}</div>
-    {set && <Field label="Current password"><input type="password" value={cur} onChange={(e) => setCur(e.target.value)} autoComplete="current-password" /></Field>}
-    <Field label={set ? "New password" : "Admin password"} hint="at least 8 characters"><input type="password" value={pw} onChange={(e) => setPw(e.target.value)} autoComplete="new-password" /></Field>
+    <h3>Account</h3>
+    <table className="grid compact"><tbody>
+      <tr><td>Signed in as</td><td><b>{me?.name || "—"}</b> <span className="hint">{me?.role}</span></td></tr>
+    </tbody></table>
+    <h3>Change password</h3>
+    <Field label="Current password"><input type="password" value={cur} onChange={(e) => setCur(e.target.value)} autoComplete="current-password" /></Field>
+    <Field label="New password" hint="at least 10 characters"><input type="password" value={pw} onChange={(e) => setPw(e.target.value)} autoComplete="new-password" /></Field>
     <Field label="Repeat"><input type="password" value={pw2} onChange={(e) => setPw2(e.target.value)} autoComplete="new-password" /></Field>
     <div className="row">
-      <button className="primary" disabled={pw.length < 8 || pw !== pw2} onClick={() => go({ current: cur, new: pw }, set ? "Password changed" : "Login enabled")}>{set ? "Change password" : "Set password and turn login on"}</button>
-      {s.security.auth_enabled && <button className="danger" disabled={!cur} onClick={() => go({ current: cur, enable: false }, "Login turned off")}>Turn login off</button>}
+      <button className="primary" disabled={busy || !cur || pw.length < 10 || pw !== pw2} onClick={go}>Change password</button>
+      <button onClick={async () => { await api.logout(); location.href = "/"; }}>Sign out</button>
     </div>
-    <p className="hint">Locked out? On the VM: <code>docker exec netlab python -m app.auth reset</code></p>
+    {s.security && <>
+      <h3>Sessions</h3>
+      <Field label="Stay signed in for" hint="hours; applies to new sign-ins">
+        <input type="number" min="1" max="720" value={s.security.session_hours} readOnly /></Field>
+      <p className="hint">Users, invites, limits and the lab sandbox are under <b>Admin</b> (your name, top right). Locked out? On the host: <code>sudo docker exec patchyard python -m app.auth reset-password {me?.name || "admin"}</code></p>
+    </>}
   </>);
 }
 
 function About({ meta }) {
+  const [sys, setSys] = useState(null);
+  const [upd, setUpd] = useState(null);
+  useEffect(() => { api.system().then(setSys).catch(() => {}); api.updateCheck().then(setUpd).catch(() => {}); }, []);
+  const feats = sys ? Object.entries(sys.features) : [];
   return (<>
-    <h3>About netlab</h3>
+    <h3>About Patchyard</h3>
     <table className="grid compact"><tbody>
       <tr><td>Version</td><td className="mono">{meta.version}</td></tr>
       <tr><td>Data folder</td><td className="mono">{meta.data}</td></tr>
+      {sys?.kernel && <tr><td>Host</td><td>{sys.os || "Linux"} · kernel {sys.kernel} · {sys.cpus} CPU · {Math.round(sys.mem_mb / 1024)} GB · Docker {sys.docker || "?"} · containerlab {sys.containerlab || "?"}</td></tr>}
     </tbody></table>
-    <h3>Updating</h3>
-    <p>netlab runs as a container built from the GitHub repository. Every push to <code>main</code> publishes a new image. To update, on the VM:</p>
-    <pre className="eq">cd /opt/netlab/deploy{"\n"}docker compose pull && docker compose up -d</pre>
-    <p className="hint">Labs, snapshots, settings and metrics history live in /opt/netlab on the VM, outside the container, so updates never touch them. Running labs keep running while netlab restarts.</p>
+    {meta.admin !== false && <>
+    <h3>Updates</h3>
+    {!upd ? <p className="hint">Checking…</p> : !upd.enabled ? <p className="hint">The update check is off (PATCHYARD_UPDATE_CHECK=0).</p>
+      : upd.available ? <div className="secstate"><Icon name="flag" /> {upd.latest.tag} is out (you have {upd.current}). <a href={upd.latest.url} target="_blank" rel="noreferrer">What's new</a></div>
+      : upd.error ? <p className="hint">Couldn't reach GitHub ({upd.error}).</p>
+      : <p className="hint">Up to date{upd.latest?.tag ? ` (latest release ${upd.latest.tag})` : ""}.</p>}
+    <p>To update, on the host:</p>
+    <pre className="eq">sudo {meta.data ? meta.data.replace(/\/labs$/, "") : "/opt/patchyard"}/deploy/update.sh</pre>
+    <p className="hint">Labs, snapshots, settings and metrics history live in the data folder, outside the container, so updates never touch them. Running labs keep running while Patchyard restarts.</p>
+    </>}
+    <h3>What this host supports</h3>
+    <table className="grid compact"><tbody>{feats.map(([k, f]) => (
+      <tr key={k}><td><span className={`led led-${f.ok ? "up" : "down"}`} />{f.needed_for}</td><td className="hint">{f.ok ? "ok" : `missing kernel module ${f.missing.join(", ")}`}</td></tr>))}
+      {!sys && <tr><td className="hint">Checking…</td></tr>}</tbody></table>
+    {feats.some(([, f]) => !f.ok) && <p className="hint">Load missing modules with <code>sudo modprobe NAME</code> (Ubuntu: <code>sudo apt install linux-modules-extra-$(uname -r)</code>), or re-run the installer, which does both.</p>}
+    <h3>Licence</h3>
+    <p className="hint">Copyright Liam Lane. Free to install and use for personal, educational and lab work; see NOTICE in the repository.</p>
   </>);
 }

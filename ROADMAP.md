@@ -1,11 +1,11 @@
 # Roadmap
 
-## Next (0.12.0)
-- **Lab challenges**: Packet Tracer-style activities with instructions and a Check button (reachability + protocol + config assertions, percentage score).
-- **Router ACLs and NAT** from the IOS CLI and Config tab (nftables on the router, like the firewall), DHCP relay (`ip helper-address`), VRFs from the IOS CLI.
+## Next (0.13.0)
+- **Lab challenges**: Packet Tracer-style activities with instructions and a Check button (reachability, protocol and config assertions, percentage score), shareable as files.
 - **External notifications**: email (SMTP), phone push via ntfy, Teams/Slack webhooks, per-rule routing and quiet hours.
-- Firewall: site-to-site IPsec/WireGuard VPN, logging of dropped traffic to a syslog server.
-- **Verify the 1-hour history check** on the VM (deferred from rev 7 testing).
+- Firewall: site-to-site WireGuard/IPsec VPN, logging of dropped traffic to a syslog server.
+- arm64 image (Raspberry Pi 5, Ampere, Apple Silicon VMs).
+- Verify the 1-hour history check on a long-running install.
 
 ## Planned
 - SD-WAN-style template: branch with dual internet, policy routing and probe-based path failover.
@@ -16,15 +16,15 @@
 - VyOS as a device type (needs an image built from the VyOS ISO; no official container image).
 - Download Simulation captures as pcap for Wireshark.
 - Scheduled snapshots; include `/opt/netlab` in the Restic backup.
-- Publish through NPM + Authentik; in-app "update available" check against GHCR.
+- Multi-user follow-ups: per-user disk quota, password reset by email, two-factor login, audit log, shared (team) labs, read-only lab sharing for instructors.
 - Self-test script: deploy a template, run checks, report pass/fail (for verifying each release on the VM).
 - Move the four original templates onto hardware models (the six 0.11 templates already use them).
 - IOS `copy … ftp://` and an SMTP/email service on servers (Packet Tracer's EMAIL page).
-- SR Linux / Arista cEOS device types; VM-based images if nested virtualisation is enabled on PV2.
+- SR Linux / Arista cEOS device types; VM-based images where nested virtualisation is available.
 - Per-hop Simulation stepping (hold packets at each device like Packet Tracer).
 
 ## Done
-- Phase 1 and Phase 2 containerlab labs verified on FLT-NETLAB-01 (incl. timed failover test).
+- Phase 1 and Phase 2 containerlab labs verified on a live host (incl. timed failover test).
 - Web app: canvas, device windows, FRR CLI, PC desktop, server services, Simulation mode.
 - VLANs/trunking, router-on-a-stick, STP, management SVI.
 - Monitoring with history, dashboard, traffic overlay, protocol views.
@@ -34,4 +34,5 @@
 - Alerting with notifications centre; global Settings; live add/remove without redeploy; traffic generator; optional login.
 - Container image + GitHub Actions publishing to GHCR.
 - 0.10.0: hardware models with modules, port types/speeds, power on/off, IOS-syntax CLI, lab delete in the manager.
+- 0.12.0: router ACLs, NAT, DHCP relay with multi-pool DHCP, VRFs from the IOS CLI; renamed to Patchyard with a one-line installer; multi-user with invites, per-user labs and limits, sandboxed lab devices and HTTPS for public hosting.
 - 0.11.0: Packet Tracer-style Config and Services tabs, firewall device (zones, rules, NAT), Open vSwitch switches (RSTP, LACP), FTP/TFTP/Syslog/NTP servers, DHCP reservations and leases, host NICs and copper SFPs, IOS copy tftp and logging host, six new templates.

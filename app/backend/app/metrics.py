@@ -8,6 +8,7 @@ Retention defaults to 48 h (NETLAB_METRICS_RETENTION_H).
 import asyncio, logging, os, sqlite3, time
 from pathlib import Path
 from . import netinfo
+from .env import env, home
 
 log = logging.getLogger("netlab.metrics")
 from . import settings
@@ -19,8 +20,7 @@ def interval() -> float:
 
 def retention_h() -> float:
     return float(settings.get("monitoring.retention_hours", 48))
-DB = Path(os.environ.get("NETLAB_METRICS_DB",
-                         Path(os.environ.get("NETLAB_DATA", "/opt/netlab/labs")).parent / "metrics.db"))
+DB = Path(env("METRICS_DB", Path(env("DATA", f"{home()}/labs")).parent / "metrics.db"))
 NCPU = os.cpu_count() or 1
 
 # live cache: lab -> {"ts", "nodes": {node: {"cpu", "mem", "state", "ifaces": {if: {...rates, state}}}}}

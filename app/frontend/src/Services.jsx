@@ -12,10 +12,16 @@ const PORTS = { http: "TCP 80", dhcp: "UDP 67", dns: "UDP/TCP 53", tftp: "UDP 69
 const isMac = (v) => /^([0-9a-f]{2}[:-]){5}[0-9a-f]{2}$/i.test(String(v || "").trim());
 const isHost = (v) => /^[A-Za-z0-9.-]{1,253}$/.test(String(v || "").trim());
 
+function dhcpDefaults(d = {}) {
+  const { start, end, mask, gateway, dns, pools, ...rest } = d;
+  const ps = pools?.length ? pools : (start || end) ? [{ name: "serverPool", start: start || "", end: end || "", mask: mask || "255.255.255.0", gateway: gateway || "", dns: dns || "" }] : [];
+  return { enabled: false, domain: "", tftp: "", lease: "12h", reservations: [], ...rest, pools: ps };
+}
+
 function withDefaults(init = {}) {
   return {
     http: { enabled: true, index_html: "", ...init.http },
-    dhcp: { enabled: false, start: "", end: "", mask: "255.255.255.0", gateway: "", dns: "", domain: "", tftp: "", lease: "12h", reservations: [], ...init.dhcp },
+    dhcp: dhcpDefaults(init.dhcp),
     dns: { enabled: false, records: [], ...init.dns },
     tftp: { enabled: false, ...init.tftp },
     ftp: { enabled: false, users: [{ user: "cisco", password: "cisco" }], ...init.ftp },
@@ -28,8 +34,12 @@ function problems(s) {
   const out = [];
   const d = s.dhcp;
   if (d.enabled) {
-    if (!isIp(d.start) || !isIp(d.end)) out.push("DHCP: start and end address are needed");
-    for (const k of ["gateway", "dns", "tftp"]) if (d[k] && !isIp(d[k])) out.push(`DHCP: ${k} isn't an IP address`);
+    if (!d.pools.length) out.push("DHCP: add a pool");
+    d.pools.forEach((pl) => {
+      if (!isIp(pl.start) || !isIp(pl.end)) out.push(`DHCP pool ${pl.name}: start and end address are needed`);
+      for (const k of ["gateway", "dns", "tftp"]) if (pl[k] && !isIp(pl[k])) out.push(`DHCP pool ${pl.name}: ${k} isn't an IP address`);
+    });
+    if (d.tftp && !isIp(d.tftp)) out.push("DHCP: TFTP server isn't an IP address");
     if (d.domain && !isHost(d.domain)) out.push("DHCP: bad domain name");
     if (!/^(\d+[mhd]?|infinite)$/.test(String(d.lease || "12h"))) out.push("DHCP: lease time like 30m, 12h, 7d or infinite");
     d.reservations.forEach((r, i) => { if (!isMac(r.mac) || !isIp(r.ip)) out.push(`DHCP reservation ${i + 1}: needs a MAC and an IP`); });
@@ -163,10 +173,12 @@ function DhcpPage({ svc, upd, head, leases, running }) {
   return (<>
     {head("dhcp")}
     <div className="fx-grid">
-      {[["start", "Start IP address", "10.0.0.100"], ["end", "End IP address", "10.0.0.200"], ["mask", "Subnet mask", "255.255.255.0"], ["gateway", "Default gateway", "10.0.0.1"],
-        ["dns", "DNS server", "10.0.0.5"], ["domain", "Domain name", "lab.local"], ["tftp", "TFTP server", "option 150/66"], ["lease", "Lease time", "12h"]].map(([k, l, ph]) => (
-        <Field key={k} label={l}><input className={d[k] && k !== "domain" && k !== "lease" && !isIp(d[k]) ? "bad" : ""} value={d[k] || ""} placeholder={ph} onChange={(e) => upd("dhcp", k, e.target.value.trim())} /></Field>))}
+      {[["domain", "Domain name", "lab.local"], ["tftp", "TFTP server", "option 150/66"], ["lease", "Lease time", "12h"]].map(([k, l, ph]) => (
+        <Field key={k} label={l}><input className={d[k] && k === "tftp" && !isIp(d[k]) ? "bad" : ""} value={d[k] || ""} placeholder={ph} onChange={(e) => upd("dhcp", k, e.target.value.trim())} /></Field>))}
     </div>
+    <h4>Pools</h4>
+    <p className="hint">One pool per subnet. The server hands out from the pool that matches the subnet the request came from: its own LAN, or a remote VLAN through a router with <span className="mono">ip helper-address</span> pointing here (the server needs a route back, usually its default gateway).</p>
+    <PoolEditor pools={d.pools} setPools={(ps) => upd("dhcp", "pools", ps)} />
     <h4>Reservations</h4>
     <p className="hint">Always give a device the same address. Its MAC is on the PC's Config tab or <span className="mono">ipconfig /all</span>.</p>
     <table className="grid compact"><thead><tr><th>MAC address</th><th>IP address</th><th>Name</th><th /></tr></thead>
@@ -184,6 +196,34 @@ function DhcpPage({ svc, upd, head, leases, running }) {
         <tr key={l.mac + l.ip}><td className="mono">{l.ip}</td><td className="mono">{l.mac}</td><td>{l.host || <span className="hint">—</span>}</td>
           <td>{l.expires === 0 ? "never" : l.expires < now ? "expired" : `in ${Math.max(1, Math.round((l.expires - now) / 60))} min`}</td></tr>))}
         {!leases.length && <tr><td colSpan={4} className="hint">{running ? "No leases yet. On a PC: Desktop › IP Configuration › DHCP, or ipconfig /renew." : "Deploy the lab to hand out addresses."}</td></tr>}</tbody></table>
+  </>);
+}
+
+function PoolEditor({ pools, setPools }) {
+  const blank = { name: "", start: "", end: "", mask: "255.255.255.0", gateway: "", dns: "", tftp: "" };
+  const [ed, setEd] = useState(null);           // index being edited, or "new"
+  const [f, setF] = useState(blank);
+  const open = (i) => { setEd(i); setF(i === "new" ? { ...blank, name: `pool${pools.length + 1}` } : { ...blank, ...pools[i] }); };
+  const okName = /^[A-Za-z0-9_.-]{1,32}$/.test(f.name) && !pools.some((p, j) => p.name === f.name && j !== ed);
+  const ok = okName && isIp(f.start) && isIp(f.end) && isIp(f.mask) && ["gateway", "dns", "tftp"].every((k) => !f[k] || isIp(f[k]));
+  const save = () => { const ps = [...pools]; if (ed === "new") ps.push(f); else ps[ed] = f; setPools(ps); setEd(null); };
+  return (<>
+    <table className="grid compact"><thead><tr><th>Pool</th><th>Range</th><th>Mask</th><th>Gateway</th><th>DNS</th><th /></tr></thead>
+      <tbody>{pools.map((p, i) => (
+        <tr key={i} className={ed === i ? "sel" : ""}><td><b>{p.name}</b></td><td className="mono">{p.start} – {p.end}</td><td className="mono">{p.mask}</td><td className="mono">{p.gateway || "—"}</td><td className="mono">{p.dns || "—"}</td>
+          <td className="row"><button className="link" onClick={() => open(i)}>Edit</button><button className="link danger" onClick={() => { setPools(pools.filter((_, j) => j !== i)); setEd(null); }}>Remove</button></td></tr>))}
+        {!pools.length && <tr><td colSpan={6} className="hint">No pools yet.</td></tr>}</tbody></table>
+    {ed === null ? <p><button onClick={() => open("new")}>Add pool</button></p> : (
+      <div className="subbox">
+        <h4>{ed === "new" ? "New pool" : `Edit ${pools[ed].name}`}</h4>
+        <div className="fx-grid">
+          {[["name", "Pool name", "users"], ["start", "Start IP", "10.10.0.100"], ["end", "End IP", "10.10.0.199"], ["mask", "Subnet mask", "255.255.255.0"],
+            ["gateway", "Default gateway", "10.10.0.1"], ["dns", "DNS server", "10.20.0.5"], ["tftp", "TFTP (this pool)", "optional"]].map(([k, l, ph]) => (
+            <Field key={k} label={l}><input className={f[k] && k !== "name" && !isIp(f[k]) ? "bad" : k === "name" && f.name && !okName ? "bad" : ""} value={f[k] || ""} placeholder={ph}
+              onChange={(e) => setF({ ...f, [k]: e.target.value.trim() })} /></Field>))}
+        </div>
+        <div className="row"><span className="grow" /><button onClick={() => setEd(null)}>Cancel</button><button className="primary" disabled={!ok} onClick={save}>{ed === "new" ? "Add" : "Done"}</button></div>
+      </div>)}
   </>);
 }
 

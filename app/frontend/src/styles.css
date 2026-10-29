@@ -561,3 +561,24 @@ select.act-accept { color: var(--ok); } select.act-drop, select.act-reject { col
 .svc .fx-c textarea { width: 100%; }
 .filearea { border: 1px dashed var(--line); border-radius: 8px; padding: 6px 8px; }
 .svc-out { margin-top: 12px; max-height: 140px; overflow: auto; }
+
+/* router ACL / NAT pages */
+.chip.on { background: var(--accent-soft); font-weight: 600; }
+.tabsrow { gap: 6px; flex-wrap: wrap; margin: 8px 0; }
+.acebuilder { border: 1px dashed var(--line); border-radius: 8px; padding: 6px 10px; margin: 10px 0; display: flex; flex-direction: column; gap: 6px; }
+.acebuilder .row input.wide { flex: 1; }
+.formrow .row { display: flex; gap: 4px; }
+
+/* account menu, admin */
+.acct { position: relative; }
+.acct-btn { display: inline-flex; align-items: center; gap: 6px; }
+.avatar { width: 24px; height: 24px; border-radius: 50%; background: var(--accent); color: var(--accent-ink); display: inline-grid; place-items: center; font: 600 12px var(--font); }
+.acct-menu { position: absolute; right: 0; top: calc(100% + 6px); min-width: 240px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,.25); padding: 6px; z-index: 50; display: flex; flex-direction: column; }
+.acct-menu .hint { padding: 6px 8px 8px; border-bottom: 1px solid var(--line); margin-bottom: 4px; }
+.acct-menu button { display: flex; align-items: center; gap: 8px; border: 0; background: none; text-align: left; padding: 7px 8px; border-radius: 6px; }
+.acct-menu button:hover { background: var(--accent-soft); }
+.admin-users td { vertical-align: middle; }
+.admin-users .row { gap: 10px; flex-wrap: wrap; }
+.invite-made { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.invite-made .mono { word-break: break-all; }
+.login-card h3 { margin: 4px 0; }

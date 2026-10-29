@@ -11,7 +11,7 @@ redeploy produces the same result.
 """
 import secrets, shlex
 from pathlib import Path
-from . import labs, netinfo, settings, devices, hardware, impair
+from . import labs, netinfo, settings, devices, hardware, impair, l3, sandbox
 from .util import run, dsh, cname, check_if
 
 
@@ -30,11 +30,14 @@ async def add_node(labd: dict, node_id: str) -> dict:
         return {"ok": True, "output": f"{node_id} already running"}
     if c:
         await run("docker", "rm", "-f", c["name"])
+    labd = labs.ensure_subnet(labd)
     topo = labs.generate(labd)              # writes per-node files and the updated topology
-    spec = labs.clab_node(labd, node)
+    spec = labs.node_spec(labd, node)
     wd = labs.workdir(labd)
-    args = ["docker", "run", "-d", "--name", cname(labd["name"], node_id), "--hostname", node_id, "--privileged",
-            "--network", labd.get("mgmt_network") or settings.get("lab_defaults.mgmt_network"),
+    net = (sandbox.mgmt(labd)["network"] if sandbox.active(labd) else
+           labd.get("mgmt_network") or settings.get("lab_defaults.mgmt_network"))
+    args = ["docker", "run", "-d", "--name", cname(labd["name"], node_id), "--hostname", node_id, *sandbox.docker_args(spec),
+            "--network", net,
             "--label", f"containerlab={labd['name']}", "--label", f"clab-node-name={node_id}",
             "--label", "clab-node-kind=linux", "--label", f"clab-topo-file={topo}",
             "--label", f"clab-node-lab-dir={wd / ('clab-' + labd['name']) / node_id}", "--label", "netlab-live=1"]
@@ -53,11 +56,13 @@ async def add_node(labd: dict, node_id: str) -> dict:
         rc, o, e = await run("docker", "exec", cname(labd["name"], node_id), *shlex.split(cmd), timeout=300)
         if rc and "eth1" not in (o + e):      # eth1 failures are expected until a cable is added
             log.append(f"exec '{cmd}': {(e or o).strip()[:200]}")
+    log += await sandbox.fixups(labd, {node_id})
     return {"ok": True, "output": "\n".join(log)}
 
 
 async def remove_node(lab: str, node_id: str) -> dict:
     rc, out, err = await run("docker", "rm", "-f", cname(lab, node_id))
+    l3.stop_relay(f"/run/netlab-relay-{lab}-{node_id}.pid")
     return {"ok": rc == 0 or "No such container" in err, "output": (out + err).strip() or f"removed {node_id}"}
 
 
@@ -77,13 +82,18 @@ async def _post_link_hook(labd, node_id, ifn):
         rc, o, e = await dsh(lab, node_id, "sh /usr/local/bin/netlab-switch")
         return f"{node_id}: {ifn} joined the bridge" + ("" if rc == 0 else f" (switch script: {(e or o).strip()[:120]})")
     if t == "router":
-        cmds = [f"[ -e /proc/sys/net/mpls/conf/{ifn}/input ] && echo 1 > /proc/sys/net/mpls/conf/{ifn}/input"]
+        c = await _ctr(lab, node_id)
+        if c and c.get("pid"):
+            await run("nsenter", "-t", str(c["pid"]), "-n", "sh", "-c",
+                      f"[ -e /proc/sys/net/mpls/conf/{ifn}/input ] && echo 1 > /proc/sys/net/mpls/conf/{ifn}/input; true")
+        cmds = ["true"]
         for si in p.get("subifs", []) or []:
             if si["parent"] == ifn:
                 name = labs.subif_name(si)
                 cmds.append(f"ip link show {name} >/dev/null 2>&1 || ip link add link {ifn} name {name} type vlan id {int(si['vlan'])}; ip link set {name} up")
         await dsh(lab, node_id, "; ".join(cmds) + "; true")
-        return f"{node_id}: {ifn} up (FRR picks it up automatically)"
+        errs = await l3.apply_node(labd, node)        # VRF membership, ACLs, NAT, relay on the new port
+        return f"{node_id}: {ifn} up (FRR picks it up automatically)" + (f" ({'; '.join(errs)[:160]})" if errs else "")
     if t in ("pc", "server") and ifn == "eth1" and p.get("ip_mode") in ("static", "dhcp"):
         if p.get("ip_mode") == "static" and not p.get("ip"):
             return ""
@@ -202,4 +212,6 @@ async def power(labd: dict, node_id: str, on: bool) -> dict:
             log.append(f"cable to {other}: {x['output']}")
         elif l.get("admin") == "down":
             await impair.set_state(labd, l, False)
+    for e in await l3.apply_node(labs.load(labd["name"]), node):
+        log.append(e)
     return {"ok": True, "output": "\n".join(log)}

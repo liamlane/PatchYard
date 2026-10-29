@@ -1,27 +1,27 @@
-# How netlab works
+# How Patchyard works
 
-This document covers how a lab goes from the canvas to running containers and what happens while it runs. It also covers where data is stored and how releases reach the VM.
+This document covers how a lab goes from the canvas to running containers and what happens while it runs. It also covers where data is stored and how releases reach the host.
 
-![netlab architecture](images/architecture.svg)
+![Patchyard architecture](images/architecture.svg)
 
 ## The pieces
 
-**The netlab container** is the only thing installed on the VM. It is built from this repo and published to `ghcr.io/liamlane/netlab`. It runs uvicorn with the FastAPI app, which serves:
+**The Patchyard container** is the only thing installed on the host. It is built from this repo and published to `ghcr.io/liamlane/patchyard`. It runs uvicorn with the FastAPI app, which serves:
 
 - the REST API under `/api`,
 - the WebSockets under `/ws` (device consoles, live status, Simulation),
 - the built React UI.
 
-The image also includes containerlab, the Docker CLI, iproute2, `nsenter`, tcpdump, iperf3 and ping. The netlab container doesn't need any of these installed on the host.
+The image also includes containerlab, the Docker CLI, iproute2, nftables, conntrack, dnsmasq, `nsenter`, tcpdump, iperf3 and ping. None of these need to be installed on the host.
 
 The container runs with:
 
 | Setting | Why |
 | --- | --- |
 | `privileged`, `pid: host`, `cgroup: host` | Find each device's PID, read its counters and cgroup stats, and `nsenter` into it |
-| `network_mode: host` | Create veth pairs and bridges in the host namespace; listen on the VM's :8080 |
+| `network_mode: host` | Create veth pairs and bridges in the host namespace; listen on the host's :8080 |
 | `/var/run/docker.sock` | Run containerlab and `docker run` against the host's Docker Engine |
-| `/opt/netlab`, `/home` (same paths) | containerlab bind-mounts config files by host path, so paths must look the same inside and outside the container |
+| `/opt/patchyard`, `/home` (same paths) | containerlab bind-mounts config files by host path, so paths must look the same inside and outside the container |
 | `/lib/modules:ro` | Load kernel modules at startup if the host hasn't already |
 
 **Lab devices** are ordinary containers on the host's Docker Engine, labelled `containerlab=<lab>` and `clab-node-name=<node>`.
@@ -49,7 +49,7 @@ All devices share a management network, `clab-mgmt` (172.31.255.0/24). Lab cable
 4. **Deploy.** `containerlab deploy` creates the containers, the veth cables and the management network, then runs each device's exec hooks. Running configs are saved before a redeploy, so nothing typed into a CLI is lost.
 5. **Running.** FRR converges, the bridges learn and forward, and the servers answer. The UI's status WebSocket shows each device turn green.
 
-**Destroy** removes the containers. The lab's folder (`/opt/netlab/labs/<lab>`) keeps the topology, configs and snapshots. **Delete lab** removes that folder. It's only allowed once nothing is running.
+**Destroy** removes the containers. The lab's folder (`/opt/patchyard/labs/<lab>`) keeps the topology, configs and snapshots. **Delete lab** removes that folder. It's only allowed once nothing is running.
 
 ### Live editing
 
@@ -99,7 +99,7 @@ The CLI tab opens an IOS-style session (`ios.py`) over the console WebSocket. It
 - **Switches**: commands edit the same props as the Config tab (VLANs, access/trunk, native/allowed VLANs, SVI, STP priority, shutdown, description) and re-run the switch script. Show output is built from those props plus live bridge state (`bridge fdb`, `/sys/class/net/br0/bridge`).
 - **Stored but no effect**: `service …`, `no ip domain-lookup`, line passwords and similar commands are saved and shown in `show running-config`, but change nothing.
 - **Real effect**: `enable secret` really gates `enable`; the banner is shown at login.
-- **Not supported**: features netlab doesn't have (packet ACLs and NAT on routers, EtherChannel on Linux-bridge switches, routed switch ports, VRF creation) print a `% netlab:` message instead of pretending.
+- **Not supported**: features Patchyard doesn't have (EtherChannel on Linux-bridge switches, routed switch ports, DHCP server on routers, IPv6 ACLs) print a `% patchyard:` message instead of pretending.
 - **Sync**: device props changed from the CLI bump a revision. The browser pulls them in from the status poll, and the server keeps them if an older autosave arrives.
 
 ## Config tab
@@ -125,7 +125,7 @@ A firewall is an Alpine container with nftables. Its props hold:
 
 ## Open vSwitch switches
 
-A switch with `engine: ovs` runs `ovsdb-server` and `ovs-vswitchd` inside its container (the host needs the `openvswitch` kernel module, which netlab loads).
+A switch with `engine: ovs` runs `ovsdb-server` and `ovs-vswitchd` inside its container (the host needs the `openvswitch` kernel module, which the installer loads).
 
 - The switch script rebuilds `br0` on every apply, with RSTP and per-port VLAN settings.
 - Port-channels are OVS bonds with LACP: `active`/`passive` map to LACP, `on` to static `balance-slb`.
@@ -133,13 +133,37 @@ A switch with `engine: ovs` runs `ovsdb-server` and `ovs-vswitchd` inside its co
 
 The Linux-bridge engine stays the default because it's lighter.
 
+## Router ACLs, NAT, DHCP relay and VRFs
+
+FRR has no packet filters, NAT or DHCP relay, so these live in the router's props and are applied from outside the router container. The router image stays stock FRR. `l3.py` holds the model, and the IOS CLI and the Config tab both edit it.
+
+| Props | IOS |
+| --- | --- |
+| `acls` `{name: {type, entries: [{seq, text}]}}` | `access-list N …` (1-99/1300-1999 standard, 100-199/2000-2699 extended); `ip access-list standard NAME` / `ip access-list extended NAME` with `[seq] permit …`, `deny …`, `remark …` |
+| `ifcfg` `{ethN: {acl_in, acl_out, nat, helpers, vrf}}` | `ip access-group N in` / `out`, `ip nat inside` / `outside`, `ip helper-address`, `vrf forwarding` |
+| `nat` `{pools, rules}` | `ip nat inside source list … interface … overload`, `… pool …`, `… static …`, `ip nat pool …` |
+| `vrfs` `{name: {rd, import, export, table}}` | `vrf definition` / `ip vrf`, `rd`, `route-target` |
+
+Changes are saved with the lab straight away, like switch settings. They don't need `write memory`.
+
+- **ACLs and NAT** become one nftables ruleset (tables `nl_acl` and `nl_nat`), loaded into the router's network namespace with the app's own `nft` (`nsenter -n`):
+  - Inbound ACLs hook prerouting ahead of DNAT and conntrack, so they see addresses as they arrive, like IOS. That also covers traffic to the router itself.
+  - Outbound ACLs filter routed traffic.
+  - Like IOS, ACLs are stateless, entries are matched in sequence order, and every list ends in an implicit deny.
+  - A denied packet gets an ICMP administratively-prohibited reply ("U" in a ping), or a silent drop on kernels that can't reject from prerouting.
+  - Every entry has a counter, which `show access-lists` and the Config tab read back.
+- **Static NAT globals** are added to the outside interface as /32 addresses labelled `ethN:nat`, so the router answers ARP for them. `show ip nat translations` reads conntrack.
+- **DHCP relay** is dnsmasq in relay-only mode (`--port=0 --dhcp-relay=<interface address>,<server>`). It runs from the app inside the router's namespace, one process per router, and sets the giaddr so the server picks the pool for that subnet.
+- **VRFs** are Linux VRF devices (`ip link add NAME type vrf table 1001+`), with interfaces enslaved to them. FRR picks them up for `router ospf vrf`, `ip route vrf` and `router bgp ASN vrf`. Cisco-style `rd`/`route-target` under the VRF are written into FRR's `router bgp ASN vrf NAME` (`rd vpn export`, `rt vpn import/export`, `export/import vpn`) when that BGP instance exists.
+- **Re-applied** after every deploy, when a cable is plugged into the router, on power-on, and when Patchyard itself restarts (the relays run from the app). They stop when the lab is destroyed.
+
 ## Server services
 
 The server's Services tab edits `props.services` and saves everything with `POST …/services`. That regenerates the files below and runs `services.sh` in the container, which starts or stops each service to match:
 
 | Service | Software | Notes |
 | --- | --- | --- |
-| DNS / DHCP | dnsmasq | A and CNAME records; DHCP options 3, 6, 15, 66/150; `dhcp-host` reservations; lease file in `configs/<server>/svc/dnsmasq.leases` |
+| DNS / DHCP | dnsmasq | A and CNAME records; one tagged `dhcp-range` per pool with its own options (3, 6, 15, 66/150), so relayed requests get the pool for their subnet; `dhcp-host` reservations; lease file in `configs/<server>/svc/dnsmasq.leases` |
 | HTTP | nginx | index page from the UI, files in `configs/<server>/www` |
 | FTP | vsftpd | local users created by the script (shell-less, home `/srv/ftp`), passive ports 30000–30100, no anonymous login; files in `configs/<server>/ftp` |
 | TFTP | `in.tftpd -4 -c` | uploads allowed; files in `configs/<server>/tftp` |
@@ -155,7 +179,7 @@ The server's Services tab edits `props.services` and saves everything with `POST
 - **Live view**: `GET …/server-status` reports which daemons are running (from `ps` in the container) and the current DHCP leases.
 - **Files**: `GET/PUT/DELETE …/server/{tftp|ftp}/{file}` lists, uploads, downloads and deletes files in the FTP and TFTP folders.
 - **Clients**:
-  - The IOS CLI's `copy … tftp:` runs the TFTP client from the netlab container inside the device's network namespace. `logging host` sends RFC 3164 messages the same way, using `logger`.
+  - The IOS CLI's `copy … tftp:` runs the TFTP client from the Patchyard container inside the device's network namespace. `logging host` sends RFC 3164 messages the same way, using `logger`.
   - PCs get an `ftp SERVER` command (a small interactive client on top of `curl`) and send their hostname with DHCP, so it shows in the lease table.
 
 ## Monitoring and alerting
@@ -169,7 +193,7 @@ Everything is measured from the host side, so nothing extra is installed in the 
   - port state from `/sys/class/net/<if>/operstate` inside the device's root,
   - CPU and memory from cgroup v2 (falling back to v1).
 
-  Rates are stored in SQLite (`/opt/netlab/metrics.db`), kept for 48 hours by default, and drive the charts, the lab dashboard and the traffic overlay on the cables.
+  Rates are stored in SQLite (`/opt/patchyard/metrics.db`), kept for 48 hours by default, and drive the charts, the lab dashboard and the traffic overlay on the cables.
 - **Health loop** (every 30 s by default) runs `vtysh -c '... json'` on routers for BGP, OSPF and LDP neighbour state. It also runs ping probes from inside a source device's namespace, like an IP SLA probe, for loss and RTT.
 - **Alert engine** checks the rules after every sample and every health pass:
   - each rule has a type, an optional lab/device scope, a threshold, a **for** hold time and a severity,
@@ -186,7 +210,7 @@ Everything is measured from the host side, so nothing extra is installed in the 
 ## Storage
 
 ```
-/opt/netlab/
+/opt/patchyard/
 ├── labs/<lab>/
 │   ├── lab.json                     topology, device properties, annotations
 │   ├── netlab-<lab>.clab.yml        generated containerlab topology
@@ -197,17 +221,39 @@ Everything is measured from the host side, so nothing extra is installed in the 
 └── deploy/                          docker-compose.yml + .env (written by setup.sh)
 ```
 
-Labs imported from an existing containerlab folder (for example the original Phase 1/2 labs in `labs/`) keep their own working directory. netlab only stores its record of them.
+Labs imported from an existing containerlab folder (for example the original Phase 1/2 labs in `labs/`) keep their own working directory. Patchyard only stores its record of them.
 
 ## Security model
 
-netlab can start privileged containers and enter any namespace, so it has to be treated as root on the VM. The optional login uses:
+Patchyard itself can start privileged containers and enter any namespace, so whoever administers it is root on the host.
 
-- a PBKDF2 password hash,
-- an HMAC-signed session cookie,
-- an ASGI middleware covering `/api` and `/ws`.
+**Accounts** (`users.py`, `<home>/users.json`):
 
-Keep port 8080 behind a reverse proxy with authentication, and don't expose it directly. Reset a lost password with `docker exec netlab python -m app.auth reset`.
+- Users have a role, `admin` or `user`, and passwords are PBKDF2 hashes.
+- New accounts come from invite links. Only a hash of each token is stored, and each token is single-use and expires.
+- The session cookie is `user.expiry.gen.signature`, HMAC-signed with `<home>/secret.key`. Bumping a user's `gen` (password change, disable) ends their other sessions.
+- Logins are throttled per username and per address.
+- State-changing requests from a foreign `Origin` are refused.
+
+**Access control** (`auth.AuthMiddleware`, pure ASGI so it covers WebSockets):
+
+- Every `/api/labs/<lab>/…` and `/ws/console/<lab>/…` request is checked against the lab's `owner` in `lab.json`. Labs from before multi-user belong to the first admin. Someone else's lab answers 404.
+- Admin-only: settings changes, importing from a host path, `/api/admin/*`.
+- Lab lists and alerts are filtered to the caller's labs.
+- `PUT /api/labs/<lab>` keeps the server's `owner`/`trusted`/`sandbox_subnet` whatever the browser sends. For normal users it also refuses raw containerlab definitions (`sandbox.check_raw`) and images outside the allowed list.
+
+**Quotas** (`users.quota`): labs, labs running at once, devices per lab, and memory/CPU per device. They come from Settings `users.quota`, with per-user overrides; admins are unlimited. They're checked on create, save, deploy and live add.
+
+**Sandbox** (`sandbox.py`, `proxy.py`; on with `--public` / `PATCHYARD_SANDBOX=1`):
+
+- **Node spec:** every node spec is rewritten to `privileged: false`, `cap-add: [NET_ADMIN, NET_RAW]`, `sysctls: {net.ipv4.ip_forward: 1}`, plus memory/CPU limits and a `PATCHYARD_PROXY` variable.
+- **Exec lines:** `apk` runs through the proxy. `sysctl -w` and `/proc/sys` writes are taken out of the exec lines, and Patchyard sets them from outside with `nsenter -n` after deploy, power-on and live add (`sandbox.fixups`).
+- **Management network:** each lab gets `py-<lab>`, a subnet from `sandbox.mgmt_pool` stored as `sandbox_subnet`, with containerlab `external-access: false`.
+- **Host bridges** (e.g. the MPLS template's INET bridge) must be named `br<hash of lab>`, so labs can't touch each other's or the host's bridges.
+- **Host firewall:** the nftables table `ip patchyard` drops lab traffic to the internet and the host, apart from the proxy port, replies, and the `full` set (labs whose owner has internet access, admins' labs, trusted labs). The proxy serves only the lab pool and connects only to `sandbox.proxy_allow` hosts on 80/443.
+- **Trusted labs:** a lab an admin marks `trusted` skips the sandbox.
+
+Behind Caddy (`--domain`), Patchyard listens on 127.0.0.1 and the cookie is `Secure`. Reset a lost password with `sudo docker exec patchyard python -m app.auth reset-password NAME`.
 
 ## Releases
 
@@ -219,13 +265,24 @@ Every push to `main`:
 2. builds the image,
 3. pushes it to GHCR as `latest` and `sha-<commit>`.
 
-A `vX.Y.Z` tag also publishes `X.Y.Z`. On the VM, `deploy/update.sh` pulls the new image and recreates the container. The labs are separate containers, so they keep running throughout.
+A `vX.Y.Z` tag also publishes `X.Y.Z` and `X.Y` images and creates a GitHub release with that version's CHANGELOG section and the installer attached. Settings → About compares the running version with the latest release (`GET /api/system/update`, cached for 6 hours; off with `PATCHYARD_UPDATE_CHECK=0`).
+
+On the host, `deploy/update.sh` pulls the new image and recreates the container. The labs are separate containers, so they keep running throughout.
+
+## Host capabilities
+
+`GET /api/system` reports, for each feature, whether its kernel modules are loaded, built in, or loadable (`/sys/module`, `modules.builtin`, `modules.dep`). It also reports the Docker and containerlab versions, CPU and memory. The UI uses the report in three places:
+
+- Settings → About lists what this host supports.
+- Templates that need a missing feature are flagged in the Lab manager.
+- The Open vSwitch engine option warns when `openvswitch` is missing.
 
 ## Known limits
 
 - The Linux-bridge switch engine runs the kernel's 802.1D STP (about 30 s convergence). For RSTP and LACP, use the Open vSwitch engine. MST isn't supported.
-- There's no DHCP relay yet (`ip helper-address` is on the roadmap), so a DHCP server only serves its own subnet.
+- Router ACLs are IPv4 only. Outbound ACLs see addresses before source NAT (IOS evaluates them after translation); inbound ACLs match IOS (before NAT).
+- Dynamic NAT to a pool without `overload` maps many inside hosts onto the pool with port translation, rather than one-to-one.
 - FTP has no anonymous login, because vsftpd won't chroot anonymous users into a writable folder.
 - There are no Cisco images (licensing). The IOS CLI is a translation layer over FRR: common IOS commands work, and anything it doesn't know goes to FRR as typed, so FRR's syntax rules apply there. One example is that FRR won't mix `network … area` with `ip ospf area` on the same router.
-- `?` lists the commands netlab translates. FRR-only commands work, but aren't listed.
+- `?` lists the commands Patchyard translates. FRR-only commands work, but aren't listed.
 - Metrics come from the host and are per-container. They measure the Linux datapath, not a vendor ASIC.

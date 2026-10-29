@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1114 250" width="1114" height="250" role="img" aria-label="netlab release and update flow"><title>netlab release and update flow</title>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1114 250" width="1114" height="250" role="img" aria-label="Patchyard release and update flow"><title>Patchyard release and update flow</title>
 <style>
   .bg{fill:#ffffff} .grp{fill:#f5f7fa;stroke:#c9d2dc} .grp2{fill:#eef3f9;stroke:#9fb3c8}
   .box{fill:#ffffff;stroke:#b8c4d0} .acc{fill:#e8f1fd;stroke:#3b82f6} .grn{fill:#e9f7ef;stroke:#22a35a}
@@ -21,33 +21,33 @@
   }
 </style><defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker></defs><rect width="1114" height="250" class="bg"/><text x="36" y="34" class="g" text-anchor="start">RELEASE AND UPDATE FLOW</text>
 <rect x="36" y="50" width="194" height="116" rx="10" class="acc" stroke-width="1.4"/>
-<text x="50" y="74" class="t" text-anchor="start">Windows laptop</text>
-<text x="50" y="94" class="s" text-anchor="start">GitHub Desktop:</text>
+<text x="50" y="74" class="t" text-anchor="start">Developer</text>
+<text x="50" y="94" class="s" text-anchor="start">git / GitHub Desktop:</text>
 <text x="50" y="112" class="s" text-anchor="start">commit to main, push.</text>
 <text x="50" y="130" class="s" text-anchor="start">Tag vX.Y.Z to release</text>
 <rect x="248" y="50" width="194" height="116" rx="10" class="box" stroke-width="1.4"/>
 <text x="262" y="74" class="t" text-anchor="start">GitHub repo</text>
-<text x="262" y="94" class="s" text-anchor="start">liamlane/netlab</text>
-<text x="262" y="112" class="s" text-anchor="start">(private)</text>
+<text x="262" y="94" class="s" text-anchor="start">liamlane/patchyard</text>
+<text x="262" y="112" class="s" text-anchor="start">(public)</text>
 <text x="262" y="130" class="s" text-anchor="start">.gitattributes forces LF</text>
 <rect x="460" y="50" width="194" height="116" rx="10" class="pur" stroke-width="1.4"/>
 <text x="474" y="74" class="t" text-anchor="start">GitHub Actions</text>
 <text x="474" y="94" class="s" text-anchor="start">pytest · UI build</text>
 <text x="474" y="112" class="s" text-anchor="start">docker build</text>
-<text x="474" y="130" class="s" text-anchor="start">push to GHCR</text>
+<text x="474" y="130" class="s" text-anchor="start">push to GHCR · release</text>
 <rect x="672" y="50" width="194" height="116" rx="10" class="org" stroke-width="1.4"/>
 <text x="686" y="74" class="t" text-anchor="start">GHCR</text>
-<text x="686" y="94" class="s" text-anchor="start">ghcr.io/liamlane/netlab</text>
+<text x="686" y="94" class="s" text-anchor="start">ghcr.io/liamlane/patchyard</text>
 <text x="686" y="112" class="s" text-anchor="start">latest · X.Y.Z · sha-…</text>
-<text x="686" y="130" class="s" text-anchor="start">(private package)</text>
+<text x="686" y="130" class="s" text-anchor="start">(public package)</text>
 <rect x="884" y="50" width="194" height="116" rx="10" class="grn" stroke-width="1.4"/>
-<text x="898" y="74" class="t" text-anchor="start">FLT-NETLAB-01</text>
-<text x="898" y="94" class="s" text-anchor="start">git pull (deploy/, labs/)</text>
-<text x="898" y="112" class="s" text-anchor="start">./deploy/update.sh</text>
+<text x="898" y="74" class="t" text-anchor="start">Your host</text>
+<text x="898" y="94" class="s" text-anchor="start">update.sh, or the</text>
+<text x="898" y="112" class="s" text-anchor="start">installer again</text>
 <text x="898" y="130" class="s" text-anchor="start">compose pull + up -d</text>
 <path d="M230,108 L248,108" class="ln" marker-end="url(#a)"/>
 <path d="M442,108 L460,108" class="ln" marker-end="url(#a)"/>
 <path d="M654,108 L672,108" class="ln" marker-end="url(#a)"/>
 <path d="M866,108 L884,108" class="ln" marker-end="url(#a)"/>
-<text x="36" y="200" class="s" text-anchor="start">Only the netlab container restarts on update. Running labs, configs, snapshots, settings and metrics</text>
-<text x="36" y="220" class="s" text-anchor="start">live on the host in /opt/netlab and are untouched. Pin a version with NETLAB_IMAGE in /opt/netlab/deploy/.env.</text></svg>
+<text x="36" y="200" class="s" text-anchor="start">Only the Patchyard container restarts on update. Running labs, configs, snapshots, settings and metrics</text>
+<text x="36" y="220" class="s" text-anchor="start">live on the host in /opt/patchyard and are untouched. Pin a version with PATCHYARD_IMAGE in /opt/patchyard/deploy/.env.</text></svg>

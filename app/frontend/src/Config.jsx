@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api.js";
 import { catalogue, fmtSpeed } from "./hw.js";
+import { systemInfo, missingFeatures } from "./sysinfo.js";
 
 // ---------------------------------------------------------------- helpers
 export const isIp = (v) => /^(25[0-5]|2[0-4]\d|1?\d?\d)(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}$/.test(String(v || "").trim());
@@ -83,7 +84,7 @@ function IosLog({ log, onClear }) {
     <div className="ioslog">
       <div className="row ioslog-h"><b>Equivalent IOS commands</b><span className="hint">exactly what was sent; the CLI tab accepts the same</span><span className="grow" />
         {log.length > 0 && <button className="link" onClick={onClear}>clear</button>}</div>
-      <pre ref={ref}>{log.length ? log.map((l, i) => <div key={i} className={/^\s*%(?! Access VLAN| netlab: saved)/.test(l) ? "eq-bad" : l.includes("#") ? "" : "eq-out"}>{l}</div>)
+      <pre ref={ref}>{log.length ? log.map((l, i) => <div key={i} className={/^\s*%(?! Access VLAN| patchyard: saved)/.test(l) ? "eq-bad" : l.includes("#") ? "" : "eq-out"}>{l}</div>)
         : "Change something and Apply: the commands appear here."}</pre>
     </div>
   );
@@ -128,7 +129,10 @@ export function RouterConfigX({ lab, node, running, notify, onRename, onUpdateNo
   const groups = [
     { title: "Global", items: [{ key: "settings", label: "Settings" }] },
     { title: "Routing", items: [{ key: "static", label: "Static", sub: st.static.length ? String(st.static.length) : "" }, { key: "ospf", label: "OSPF", sub: st.ospf ? "on" : "" },
-      { key: "bgp", label: "BGP", sub: st.bgp ? `AS ${st.bgp.asn}` : "" }, { key: "mpls", label: "MPLS / LDP", sub: st.ldp ? "on" : "" }] },
+      { key: "bgp", label: "BGP", sub: st.bgp ? `AS ${st.bgp.asn}` : "" }, { key: "mpls", label: "MPLS / LDP", sub: st.ldp ? "on" : "" },
+      { key: "vrf", label: "VRFs", sub: Object.keys(st.props?.vrfs || {}).length ? String(Object.keys(st.props.vrfs).length) : "" }] },
+    { title: "Security & NAT", items: [{ key: "acl", label: "Access lists", sub: Object.keys(st.props?.acls || {}).length ? String(Object.keys(st.props.acls).length) : "" },
+      { key: "nat", label: "NAT", sub: (st.props?.nat?.rules || []).length ? "on" : "" }] },
     { title: "Interfaces", items: [...phys, ...subs, ...loops].map((p) => ({ key: `if:${p.if}`, label: p.name, dot: portDot(p), sub: p.cfg?.addrs?.[0] || (p.peer ? `→ ${p.peer.node}` : ""), title: p.name })) },
   ];
   const ro = !running;
@@ -143,6 +147,9 @@ export function RouterConfigX({ lab, node, running, notify, onRename, onUpdateNo
         {page === "ospf" && <ROspf {...P} />}
         {page === "bgp" && <RBgp {...P} />}
         {page === "mpls" && <RMpls {...P} />}
+        {page === "vrf" && <RVrf {...P} />}
+        {page === "acl" && <RAcl {...P} />}
+        {page === "nat" && <RNat {...P} />}
         {page.startsWith("if:") && <RIface key={page} {...P} port={ports.find((p) => p.if === page.slice(3))} onPick={setPage} />}
       </div>
       <IosLog log={dev.log} onClear={() => dev.setLog([])} />
@@ -238,6 +245,7 @@ function RIface({ st, dev, ro, port, onPick }) {
       <Field label="Passive" hint="Advertise the network but don't form neighbours (LANs, loopbacks)."><input type="checkbox" checked={d.passive} disabled={ro} onChange={(e) => set("passive", e.target.checked)} /></Field>
       {!isLoop && <Field label="MPLS (LDP)" hint="Same as 'mpls ip'. Needs Loopback0 with a /32."><input type="checkbox" checked={d.ldp} disabled={ro} onChange={(e) => set("ldp", e.target.checked)} /></Field>}
       <ApplyBar dirty={dirty} busy={dev.busy} disabled={ro || bad} onApply={apply} onReset={reset} />
+      {!isLoop && <RIfServices key={port.if} st={st} dev={dev} ro={ro} port={port} />}
       {!isSub && !isLoop && (
         <div className="subbox">
           <h4>Subinterfaces (router-on-a-stick)</h4>
@@ -425,6 +433,266 @@ function RBgp({ st, dev, ro }) {
   );
 }
 
+// ---------------------------------------------------------------- router: ACLs, NAT, VRFs, per-interface services
+const aclNames = (st) => Object.keys(st.props?.acls || {}).sort((a, b) => (isNaN(a) - isNaN(b)) || (Number(a) - Number(b)) || a.localeCompare(b));
+const portName = (st, ifn) => st.ports.find((p) => p.if === ifn)?.name || ifn;
+
+function RIfServices({ st, dev, ro, port }) {
+  const c = st.props?.ifcfg?.[port.if] || {};
+  const init = useMemo(() => ({ in: c.acl_in || "", out: c.acl_out || "", nat: c.nat || "", helpers: (c.helpers || []).join(", "), vrf: c.vrf || "" }), [JSON.stringify(c)]); // eslint-disable-line
+  const [d, set, dirty, reset] = useDraft(init);
+  const helpers = d.helpers.split(/[\s,]+/).filter(Boolean);
+  const bad = helpers.some((h) => !isIp(h));
+  const vrfs = Object.keys(st.props?.vrfs || {});
+  const apply = () => {
+    const cmds = ["configure terminal", `interface ${port.name}`];
+    if (d.vrf !== init.vrf) cmds.push(d.vrf ? `vrf forwarding ${d.vrf}` : `no vrf forwarding ${init.vrf}`);
+    if (d.in !== init.in) cmds.push(d.in ? `ip access-group ${d.in} in` : `no ip access-group ${init.in} in`);
+    if (d.out !== init.out) cmds.push(d.out ? `ip access-group ${d.out} out` : `no ip access-group ${init.out} out`);
+    if (d.nat !== init.nat) cmds.push(d.nat ? `ip nat ${d.nat}` : `no ip nat ${init.nat}`);
+    const old = (c.helpers || []);
+    old.filter((h) => !helpers.includes(h)).forEach((h) => cmds.push(`no ip helper-address ${h}`));
+    helpers.filter((h) => !old.includes(h)).forEach((h) => cmds.push(`ip helper-address ${h}`));
+    cmds.push("end");
+    dev.ios(cmds);
+  };
+  return (
+    <div className="subbox">
+      <h4>Filtering, NAT and services</h4>
+      <Field label="VRF" hint={d.vrf !== init.vrf ? "Moving the port into or out of a VRF removes its IP address (as on IOS): set it again afterwards." : "Create VRFs under Routing → VRFs."}>
+        <select value={d.vrf} disabled={ro} onChange={(e) => set("vrf", e.target.value)}><option value="">global table</option>{vrfs.map((v) => <option key={v}>{v}</option>)}</select></Field>
+      <Field label="Access list in" hint="Filters packets arriving on this port (also traffic to the router itself).">
+        <select value={d.in} disabled={ro} onChange={(e) => set("in", e.target.value)}><option value="">none</option>{aclNames(st).map((n) => <option key={n}>{n}</option>)}</select></Field>
+      <Field label="Access list out" hint="Filters packets routed out of this port.">
+        <select value={d.out} disabled={ro} onChange={(e) => set("out", e.target.value)}><option value="">none</option>{aclNames(st).map((n) => <option key={n}>{n}</option>)}</select></Field>
+      <Field label="NAT">
+        <div className="seg">{[["", "none"], ["inside", "inside"], ["outside", "outside"]].map(([v, l]) => <button key={l} disabled={ro} className={d.nat === v ? "on" : ""} onClick={() => set("nat", v)}>{l}</button>)}</div></Field>
+      <Field label="DHCP relay" hint="ip helper-address: DHCP requests on this port go to these servers (comma-separated).">
+        <input className={bad ? "bad" : ""} value={d.helpers} disabled={ro} placeholder="10.20.0.5" onChange={(e) => set("helpers", e.target.value)} /></Field>
+      <ApplyBar dirty={dirty} busy={dev.busy} disabled={ro || bad} onApply={apply} onReset={reset} />
+    </div>
+  );
+}
+
+const PORT_OPS = ["", "eq", "neq", "gt", "lt", "range"];
+function addrText(kind, v, w) {
+  if (kind === "any") return "any";
+  if (kind === "host") return `host ${v}`;
+  return `${v} ${w}`;
+}
+function AddrPick({ label, a, setA, ro }) {
+  return (
+    <label>{label}
+      <span className="row">
+        <select value={a.kind} disabled={ro} onChange={(e) => setA({ ...a, kind: e.target.value })}><option value="any">any</option><option value="host">host</option><option value="net">network</option></select>
+        {a.kind !== "any" && <input className={a.ip && !isIp(a.ip) ? "bad" : ""} value={a.ip} placeholder="192.168.1.0" disabled={ro} onChange={(e) => setA({ ...a, ip: e.target.value.trim() })} />}
+        {a.kind === "net" && <input className={a.w && !isIp(a.w) ? "bad" : ""} value={a.w} placeholder="0.0.0.255 (wildcard)" disabled={ro} onChange={(e) => setA({ ...a, w: e.target.value.trim() })} />}
+      </span>
+    </label>
+  );
+}
+const addrOk = (a) => a.kind === "any" || (isIp(a.ip) && (a.kind === "host" || isIp(a.w)));
+
+function AceBuilder({ type, ro, busy, onAdd }) {
+  const blankA = { kind: "any", ip: "", w: "" };
+  const [act, setAct] = useState("permit");
+  const [proto, setProto] = useState("ip");
+  const [src, setSrc] = useState(blankA);
+  const [dst, setDst] = useState(blankA);
+  const [dop, setDop] = useState({ op: "", p1: "", p2: "" });
+  const [flags, setFlags] = useState({ est: false, log: false });
+  const [raw, setRaw] = useState("");
+  const [seq, setSeq] = useState("");
+  const ports = proto === "tcp" || proto === "udp";
+  let text = "";
+  if (type === "standard") text = `${act} ${addrText(src.kind, src.ip, src.w)}`;
+  else text = `${act} ${proto} ${addrText(src.kind, src.ip, src.w)} ${addrText(dst.kind, dst.ip, dst.w)}` +
+    (ports && dop.op ? ` ${dop.op} ${dop.p1}${dop.op === "range" ? ` ${dop.p2}` : ""}` : "") + (proto === "tcp" && flags.est ? " established" : "");
+  if (flags.log) text += " log";
+  const ok = addrOk(src) && (type === "standard" || addrOk(dst)) && (!ports || !dop.op || (dop.p1 && (dop.op !== "range" || dop.p2)));
+  const add = (t) => onAdd(seq ? `${seq} ${t}` : t, () => { setRaw(""); setSeq(""); });
+  return (
+    <div className="acebuilder">
+      <div className="formrow">
+        <label>Seq<input className="narrow" value={seq} placeholder="auto" disabled={ro} onChange={(e) => setSeq(e.target.value.replace(/\D/g, ""))} /></label>
+        <label>Action<select value={act} disabled={ro} onChange={(e) => setAct(e.target.value)}><option>permit</option><option>deny</option></select></label>
+        {type === "extended" && <label>Protocol<select value={proto} disabled={ro} onChange={(e) => setProto(e.target.value)}>{["ip", "tcp", "udp", "icmp", "ospf", "gre", "esp"].map((x) => <option key={x}>{x}</option>)}</select></label>}
+        <AddrPick label="Source" a={src} setA={setSrc} ro={ro} />
+        {type === "extended" && <AddrPick label="Destination" a={dst} setA={setDst} ro={ro} />}
+        {type === "extended" && ports && <label>Dest. port<span className="row">
+          <select value={dop.op} disabled={ro} onChange={(e) => setDop({ ...dop, op: e.target.value })}>{PORT_OPS.map((o) => <option key={o} value={o}>{o || "any"}</option>)}</select>
+          {dop.op && <input className="narrow" value={dop.p1} placeholder="80 / www" disabled={ro} onChange={(e) => setDop({ ...dop, p1: e.target.value.trim() })} />}
+          {dop.op === "range" && <input className="narrow" value={dop.p2} placeholder="90" disabled={ro} onChange={(e) => setDop({ ...dop, p2: e.target.value.trim() })} />}</span></label>}
+        {type === "extended" && proto === "tcp" && <label className="chk"><input type="checkbox" checked={flags.est} disabled={ro} onChange={(e) => setFlags({ ...flags, est: e.target.checked })} /> established</label>}
+        <label className="chk"><input type="checkbox" checked={flags.log} disabled={ro} onChange={(e) => setFlags({ ...flags, log: e.target.checked })} /> log</label>
+      </div>
+      <div className="row"><span className="mono hint">{seq ? `${seq} ` : ""}{text}</span><span className="grow" />
+        <button className="primary" disabled={ro || busy || !ok} onClick={() => add(text)}>Add entry</button></div>
+      <div className="row"><input className="wide mono" value={raw} placeholder={type === "standard" ? "or type it: deny host 10.0.0.5" : "or type it: permit tcp 10.1.0.0 0.0.255.255 any eq 443"} disabled={ro} onChange={(e) => setRaw(e.target.value)} />
+        <button disabled={ro || busy || !/^(permit|deny|remark)\s/.test(raw.trim())} onClick={() => add(raw.trim())}>Add</button></div>
+    </div>
+  );
+}
+
+function RAcl({ st, dev, ro }) {
+  const acls = st.props?.acls || {};
+  const names = aclNames(st);
+  const [cur, setCur] = useState(names[0] || "");
+  const [nn, setNn] = useState({ name: "", type: "extended" });
+  const a = acls[cur];
+  const hits = st.hits || {};
+  const used = Object.entries(st.props?.ifcfg || {}).flatMap(([i, c]) => [c.acl_in === cur && `${portName(st, i)} in`, c.acl_out === cur && `${portName(st, i)} out`]).filter(Boolean);
+  const natUse = (st.props?.nat?.rules || []).some((r) => r.acl === cur);
+  const numType = (n) => (/^\d+$/.test(n) ? ((n >= 1 && n <= 99) || (n >= 1300 && n <= 1999) ? "standard" : (n >= 100 && n <= 199) || (n >= 2000 && n <= 2699) ? "extended" : null) : undefined);
+  const nt = numType(nn.name);
+  const okNew = nn.name && !acls[nn.name] && nt !== null && (/^\d+$/.test(nn.name) || /^[A-Za-z][\w.-]{0,31}$/.test(nn.name));
+  const create = async () => {
+    const type = nt || nn.type;
+    await dev.ios(["configure terminal", `ip access-list ${type} ${nn.name}`, "end"]);
+    setCur(nn.name); setNn({ name: "", type: nn.type });
+  };
+  return (
+    <div className="page">
+      <h3>Access lists</h3>
+      <p className="hint">Stateless packet filters with an implicit deny at the end, as on IOS. Apply one to an interface (Interfaces → the port → Access list in/out) or use it to pick which hosts NAT translates. Denied packets get an ICMP "administratively prohibited" reply (U in a ping).</p>
+      <div className="row tabsrow">
+        {names.map((n) => <button key={n} className={`chip ${n === cur ? "on" : ""}`} onClick={() => setCur(n)}>{n} <span className="hint">{acls[n].type === "standard" ? "std" : "ext"}</span></button>)}
+        <span className="grow" />
+        <input className="narrow" value={nn.name} placeholder="101 or NAME" disabled={ro} onChange={(e) => setNn({ ...nn, name: e.target.value.trim() })} />
+        {nt === undefined && <select value={nn.type} disabled={ro} onChange={(e) => setNn({ ...nn, type: e.target.value })}><option value="standard">standard</option><option value="extended">extended</option></select>}
+        {nt && <span className="hint">{nt}</span>}
+        <button disabled={ro || !okNew || dev.busy} onClick={create}>New list</button>
+      </div>
+      {nn.name && nt === null && <p className="error">Numbered lists: 1-99 / 1300-1999 standard, 100-199 / 2000-2699 extended.</p>}
+      {!a && <p className="hint">No access lists yet.</p>}
+      {a && (<>
+        <h4>{a.type === "standard" ? "Standard" : "Extended"} IP access list {cur}
+          <span className="hint"> · {used.length || natUse ? `used on ${[...used, ...(natUse ? ["NAT"] : [])].join(", ")}` : "not applied anywhere"}</span></h4>
+        <table className="grid compact">
+          <thead><tr><th>Seq</th><th>Entry</th><th>Matches</th><th /></tr></thead>
+          <tbody>{a.entries.map((e) => (
+            <tr key={e.seq} className={e.text.startsWith("remark") ? "hint" : ""}><td className="mono">{e.seq}</td><td className="mono">{e.text}</td>
+              <td className="mono">{e.text.startsWith("remark") ? "" : (hits[`acl:${cur}:${e.seq}`] || 0) + (hits[`nat:${cur}:${e.seq}`] || 0)}</td>
+              <td><button className="link danger" disabled={ro || dev.busy} onClick={() => dev.ios(["configure terminal", `ip access-list ${a.type} ${cur}`, `no ${e.seq}`, "end"])}>Remove</button></td></tr>))}
+            <tr className="hint"><td /><td className="mono">{a.type === "standard" ? "deny any" : "deny ip any any"} (implicit)</td><td className="mono">{hits[`acl:${cur}:implicit`] || 0}</td><td /></tr></tbody>
+        </table>
+        <AceBuilder type={a.type} ro={ro} busy={dev.busy} onAdd={async (t, done) => { const r = await dev.ios(["configure terminal", `ip access-list ${a.type} ${cur}`, t, "end"]); if (r?.ok) done(); }} />
+        <p className="row"><button disabled={ro || dev.busy} onClick={() => dev.ios(["clear access-list counters"])}>Clear counters</button>
+          <span className="grow" /><button className="link danger" disabled={ro || dev.busy} onClick={async () => { if (confirm(`Delete access list ${cur}?`)) { await dev.ios(["configure terminal", `no ip access-list ${a.type} ${cur}`, "end"]); setCur(""); } }}>Delete list</button></p>
+      </>)}
+    </div>
+  );
+}
+
+function RNat({ st, dev, ro }) {
+  const nat = st.props?.nat || { rules: [], pools: {} };
+  const cfg = st.props?.ifcfg || {};
+  const ifs = st.ports.filter((p) => p.if.startsWith("eth"));
+  const ins = Object.entries(cfg).filter(([, c]) => c.nat === "inside").map(([i]) => i);
+  const outs = Object.entries(cfg).filter(([, c]) => c.nat === "outside").map(([i]) => i);
+  const [dyn, setDyn] = useState({ acl: "", target: "interface", iface: "", pool: "", overload: true });
+  const [sta, setSta] = useState({ kind: "static", proto: "tcp", local: "", lport: "", global: "", gport: "", iface: "" });
+  const [pool, setPool] = useState({ name: "", start: "", end: "", mask: "255.255.255.0" });
+  const [tr, setTr] = useState("");
+  const side = (i, v) => dev.ios(["configure terminal", `interface ${portName(st, i)}`, v ? `ip nat ${v}` : `no ip nat ${cfg[i]?.nat}`, "end"]);
+  const ruleCmd = (r) => {
+    if (r.type === "list") return `ip nat inside source list ${r.acl} ${r.interface ? `interface ${portName(st, r.interface)} overload` : `pool ${r.pool}${r.overload ? " overload" : ""}`}`;
+    if (r.type === "static") return `ip nat inside source static ${r.local} ${r.global}`;
+    return `ip nat inside source static ${r.proto} ${r.local} ${r.lport} ${r.interface ? `interface ${portName(st, r.interface)}` : r.global} ${r.gport}`;
+  };
+  const okDyn = dyn.acl && (dyn.target === "interface" ? dyn.iface : dyn.pool);
+  const okSta = isIp(sta.local) && (sta.kind === "static" ? isIp(sta.global) : (/^\d+$/.test(sta.lport) && /^\d+$/.test(sta.gport) && (isIp(sta.global) || sta.iface)));
+  return (
+    <div className="page">
+      <h3>NAT</h3>
+      <p className="hint">Mark the LAN side inside and the internet side outside, then add a rule. PAT (overload) is the usual one: an access list picks the inside hosts, they share the outside interface's address.</p>
+      <h4>Interfaces</h4>
+      <table className="grid compact"><thead><tr><th>Interface</th><th>Address</th><th>NAT</th></tr></thead>
+        <tbody>{ifs.map((p) => (
+          <tr key={p.if}><td>{p.name}</td><td className="mono">{p.cfg?.addrs?.[0] || ""}</td>
+            <td><div className="seg">{[["", "none"], ["inside", "inside"], ["outside", "outside"]].map(([v, l]) => (
+              <button key={l} disabled={ro || dev.busy} className={(cfg[p.if]?.nat || "") === v ? "on" : ""} onClick={() => (cfg[p.if]?.nat || "") !== v && side(p.if, v)}>{l}</button>))}</div></td></tr>))}</tbody></table>
+      {(!ins.length || !outs.length) && <p className="hint">Rules do nothing until there's at least one inside and one outside interface.</p>}
+      <h4>Rules</h4>
+      <table className="grid compact"><tbody>{nat.rules.map((r, i) => (
+        <tr key={i}><td className="mono">{ruleCmd(r)}</td>
+          <td><button className="link danger" disabled={ro || dev.busy} onClick={() => dev.ios(["configure terminal", `no ${ruleCmd(r)}`, "end"])}>Remove</button></td></tr>))}
+        {!nat.rules.length && <tr><td className="hint">No NAT rules.</td></tr>}</tbody></table>
+      <div className="formrow">
+        <label>Dynamic: inside hosts (ACL)<select value={dyn.acl} disabled={ro} onChange={(e) => setDyn({ ...dyn, acl: e.target.value })}><option value="">pick an access list…</option>{aclNames(st).map((n) => <option key={n}>{n}</option>)}</select></label>
+        <label>Translate to<select value={dyn.target} disabled={ro} onChange={(e) => setDyn({ ...dyn, target: e.target.value })}><option value="interface">interface address (PAT)</option><option value="pool">address pool</option></select></label>
+        {dyn.target === "interface"
+          ? <label>Interface<select value={dyn.iface} disabled={ro} onChange={(e) => setDyn({ ...dyn, iface: e.target.value })}><option value="">…</option>{outs.map((i) => <option key={i} value={i}>{portName(st, i)}</option>)}</select></label>
+          : <><label>Pool<select value={dyn.pool} disabled={ro} onChange={(e) => setDyn({ ...dyn, pool: e.target.value })}><option value="">…</option>{Object.keys(nat.pools || {}).map((n) => <option key={n}>{n}</option>)}</select></label>
+            <label className="chk"><input type="checkbox" checked={dyn.overload} disabled={ro} onChange={(e) => setDyn({ ...dyn, overload: e.target.checked })} /> overload</label></>}
+        <button className="primary" disabled={ro || !okDyn || dev.busy} onClick={() => dev.ios(["configure terminal", ruleCmd({ type: "list", acl: dyn.acl, interface: dyn.target === "interface" ? dyn.iface : "", pool: dyn.pool, overload: dyn.overload }), "end"])}>Add</button>
+      </div>
+      <div className="formrow">
+        <label>Static<select value={sta.kind} disabled={ro} onChange={(e) => setSta({ ...sta, kind: e.target.value })}><option value="static">one-to-one</option><option value="port">port forward</option></select></label>
+        {sta.kind === "port" && <label>Proto<select value={sta.proto} disabled={ro} onChange={(e) => setSta({ ...sta, proto: e.target.value })}><option>tcp</option><option>udp</option></select></label>}
+        <label>Inside local<input className={sta.local && !isIp(sta.local) ? "bad" : ""} value={sta.local} placeholder="192.168.1.10" disabled={ro} onChange={(e) => setSta({ ...sta, local: e.target.value.trim() })} /></label>
+        {sta.kind === "port" && <label>Port<input className="narrow" value={sta.lport} placeholder="80" disabled={ro} onChange={(e) => setSta({ ...sta, lport: e.target.value.replace(/\D/g, "") })} /></label>}
+        <label>Inside global<input className={sta.global && !isIp(sta.global) ? "bad" : ""} value={sta.global} placeholder={sta.kind === "port" ? "203.0.113.5 or pick an interface" : "203.0.113.5"} disabled={ro || !!sta.iface} onChange={(e) => setSta({ ...sta, global: e.target.value.trim() })} /></label>
+        {sta.kind === "port" && <label>or interface<select value={sta.iface} disabled={ro} onChange={(e) => setSta({ ...sta, iface: e.target.value, global: "" })}><option value="">—</option>{outs.map((i) => <option key={i} value={i}>{portName(st, i)}</option>)}</select></label>}
+        {sta.kind === "port" && <label>Port<input className="narrow" value={sta.gport} placeholder="8080" disabled={ro} onChange={(e) => setSta({ ...sta, gport: e.target.value.replace(/\D/g, "") })} /></label>}
+        <button className="primary" disabled={ro || !okSta || dev.busy} onClick={() => dev.ios(["configure terminal", ruleCmd(sta.kind === "static" ? { type: "static", local: sta.local, global: sta.global }
+          : { type: "static-port", proto: sta.proto, local: sta.local, lport: sta.lport, global: sta.global, interface: sta.iface, gport: sta.gport }), "end"])}>Add</button>
+      </div>
+      <h4>Address pools</h4>
+      <table className="grid compact"><tbody>{Object.entries(nat.pools || {}).map(([n, pl]) => (
+        <tr key={n}><td className="mono">{n}</td><td className="mono">{pl.start} – {pl.end}</td><td className="mono">{pl.mask}</td>
+          <td><button className="link danger" disabled={ro || dev.busy} onClick={() => dev.ios(["configure terminal", `no ip nat pool ${n}`, "end"])}>Remove</button></td></tr>))}</tbody></table>
+      <div className="formrow">
+        <label>Name<input value={pool.name} placeholder="PUBLIC" disabled={ro} onChange={(e) => setPool({ ...pool, name: e.target.value.trim() })} /></label>
+        <label>Start<input value={pool.start} placeholder="203.0.113.10" disabled={ro} onChange={(e) => setPool({ ...pool, start: e.target.value.trim() })} /></label>
+        <label>End<input value={pool.end} placeholder="203.0.113.20" disabled={ro} onChange={(e) => setPool({ ...pool, end: e.target.value.trim() })} /></label>
+        <label>Netmask<input value={pool.mask} disabled={ro} onChange={(e) => setPool({ ...pool, mask: e.target.value.trim() })} /></label>
+        <button disabled={ro || dev.busy || !pool.name || !isIp(pool.start) || !isIp(pool.end) || maskToLen(pool.mask) == null}
+          onClick={async () => { const r = await dev.ios(["configure terminal", `ip nat pool ${pool.name} ${pool.start} ${pool.end} netmask ${pool.mask}`, "end"]); if (r?.ok) setPool({ name: "", start: "", end: "", mask: pool.mask }); }}>Add pool</button>
+      </div>
+      <h4>Translations</h4>
+      <p className="row"><button disabled={ro} onClick={async () => { const r = await dev.ios(["show ip nat translations"]); if (r) setTr(r.transcript.split("\n").slice(1).join("\n")); }}>Show translations</button>
+        <button disabled={ro} onClick={() => { dev.ios(["clear ip nat translation *"]); setTr(""); }}>Clear dynamic translations</button></p>
+      {tr && <pre className="eq">{tr}</pre>}
+    </div>
+  );
+}
+
+function RVrf({ st, dev, ro }) {
+  const vrfs = st.props?.vrfs || {};
+  const cfg = st.props?.ifcfg || {};
+  const [f, setF] = useState({ name: "", rd: "", imp: "", exp: "" });
+  const rdOk = (v) => !v || /^(\d+:\d+|\d+\.\d+\.\d+\.\d+:\d+)$/.test(v);
+  const rts = (v) => v.split(/[\s,]+/).filter(Boolean);
+  const ok = /^[A-Za-z][\w-]{0,14}$/.test(f.name) && !vrfs[f.name] && rdOk(f.rd) && rts(f.imp).every(rdOk) && rts(f.exp).every(rdOk);
+  return (
+    <div className="page">
+      <h3>VRFs</h3>
+      <p className="hint">Separate routing tables on one router (Linux VRF devices; FRR runs OSPF/BGP/static per VRF). Put interfaces in a VRF on their interface page. The route distinguisher and route targets are used by BGP for MPLS L3VPN (address-family ipv4 vrf NAME under router bgp).</p>
+      <table className="grid compact"><thead><tr><th>Name</th><th>RD</th><th>Import RT</th><th>Export RT</th><th>Interfaces</th><th /></tr></thead>
+        <tbody>{Object.entries(vrfs).map(([n, v]) => (
+          <tr key={n}><td><b>{n}</b></td><td className="mono">{v.rd || "—"}</td><td className="mono">{(v.import || []).join(" ") || "—"}</td><td className="mono">{(v.export || []).join(" ") || "—"}</td>
+            <td>{Object.entries(cfg).filter(([, c]) => c.vrf === n).map(([i]) => portName(st, i)).join(", ") || <span className="hint">none</span>}</td>
+            <td><button className="link danger" disabled={ro || dev.busy} onClick={() => confirm(`Delete VRF ${n}? Its interfaces go back to the global table without addresses.`) && dev.ios(["configure terminal", `no vrf definition ${n}`, "end"])}>Delete</button></td></tr>))}
+          {!Object.keys(vrfs).length && <tr><td colSpan={6} className="hint">No VRFs.</td></tr>}</tbody></table>
+      <div className="formrow">
+        <label>Name<input value={f.name} placeholder="CUST-A" disabled={ro} onChange={(e) => setF({ ...f, name: e.target.value.trim() })} /></label>
+        <label>RD<input className={rdOk(f.rd) ? "" : "bad"} value={f.rd} placeholder="65000:1" disabled={ro} onChange={(e) => setF({ ...f, rd: e.target.value.trim() })} /></label>
+        <label>Import RTs<input value={f.imp} placeholder="65000:1" disabled={ro} onChange={(e) => setF({ ...f, imp: e.target.value })} /></label>
+        <label>Export RTs<input value={f.exp} placeholder="65000:1" disabled={ro} onChange={(e) => setF({ ...f, exp: e.target.value })} /></label>
+        <button className="primary" disabled={ro || !ok || dev.busy} onClick={async () => {
+          const c = ["configure terminal", `vrf definition ${f.name}`];
+          if (f.rd) c.push(`rd ${f.rd}`);
+          c.push("address-family ipv4", ...rts(f.imp).map((x) => `route-target import ${x}`), ...rts(f.exp).map((x) => `route-target export ${x}`), "exit-address-family", "end");
+          const r = await dev.ios(c); if (r?.ok) setF({ name: "", rd: "", imp: "", exp: "" });
+        }}>Add VRF</button>
+      </div>
+      <p className="hint">Routes per VRF: ip route vrf NAME … in the CLI; ping vrf NAME A.B.C.D; show ip route vrf NAME.</p>
+    </div>
+  );
+}
+
+
 function RMpls({ st, dev, ro }) {
   const lo = st.ports.find((p) => p.if === "lo")?.cfg?.addrs?.find((a) => a.endsWith("/32"));
   const ifs = st.ports.filter((p) => p.if.startsWith("eth") && p.cfg?.addrs?.length);
@@ -485,12 +753,15 @@ const vlanName = (p, id) => (p.vlans || []).find((v) => Number(v.id) === Number(
 
 function SwSettings({ node, p, dev, running, onRename, onUpdateNode, notify }) {
   const [host, setHost] = useState(p.hostname || node.id);
+  const [sys, setSys] = useState(null);
+  useEffect(() => { systemInfo().then(setSys); }, []);
+  const noOvs = missingFeatures(sys, ["ovs"]).length > 0;
   return (
     <div className="page">
       <h3>Settings</h3>
       <Field label="Hostname"><span className="row"><input value={host} onChange={(e) => setHost(e.target.value.replace(/\s/g, ""))} />
         <button disabled={!host || host === (p.hostname || node.id) || dev.busy} onClick={() => dev.ios(["configure terminal", `hostname ${host}`, "end"])}>Apply</button></span></Field>
-      <Field label="Switch engine" hint={running ? "Power the switch off (Physical tab) or destroy the lab to change engine." : "Open vSwitch adds RSTP and LACP port-channels; the Linux bridge is lighter (802.1D STP only)."}>
+      <Field label="Switch engine" hint={running ? "Power the switch off (Physical tab) or destroy the lab to change engine." : noOvs ? "This host has no openvswitch kernel module, so the Open vSwitch engine won't start (Settings → About)." : "Open vSwitch adds RSTP and LACP port-channels; the Linux bridge is lighter (802.1D STP only)."}>
         <select value={p.engine || "bridge"} disabled={running} onChange={(e) => { onUpdateNode(node.id, { engine: e.target.value === "ovs" ? "ovs" : null }); notify(`Engine set to ${e.target.value === "ovs" ? "Open vSwitch" : "Linux bridge"}`, "Takes effect when the switch starts.", "ok"); }}>
           <option value="bridge">Linux bridge (802.1D)</option><option value="ovs">Open vSwitch (RSTP, LACP)</option></select></Field>
       <Field label="Configuration" hint="Switch settings are saved as you apply them (no separate write memory needed).">

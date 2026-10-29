@@ -130,7 +130,7 @@ function Physical({ lab, node, running }) {
     .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
   return (
     <div>
-      <p className="hint">{TYPE_LABEL[node.type]}, {node.raw ? `imported (${node.raw.image || node.raw.kind})` : "netlab device"}</p>
+      <p className="hint">{TYPE_LABEL[node.type]}, {node.raw ? `imported (${node.raw.image || node.raw.kind})` : "Patchyard device"}</p>
       {err && <p className="error">{err}</p>}
       <table className="grid">
         <thead><tr><th>Port</th><th>Link</th><th>Connected to</th><th>Media</th><th>MAC</th><th>IPv4</th></tr></thead>

@@ -113,6 +113,17 @@ def isp_mpls(name):
         for i, t in enumerate("abc"):
             x = base + 330 * i
             pos[f"isp{n}-pe-{t}"] = (x, 400); pos[f"c{n}{t}-r1"] = (x, 580); pos[f"c{n}{t}-web"] = (x, 740)
+    # the INET bridge lives on the host: give it (and its host-side ports) names unique to this lab
+    bp = labs.bridge_prefix(lab)
+    tag = bp[2:7]
+    for nd in lab["nodes"]:
+        if nd["id"] == "br-inet":
+            nd["id"] = bp
+    for l in lab["links"]:
+        for s_, o in (("a", "b"), ("b", "a")):
+            if l[s_] == "br-inet":
+                l[s_], l[f"{s_}_if"] = bp, f"b{tag}-{l[o]}"[:15]
+    pos[bp] = pos.pop("br-inet")
     for nd in lab["nodes"]:
         if nd["id"] in pos:
             nd["x"], nd["y"] = pos[nd["id"]]
@@ -350,8 +361,9 @@ def small_office(name):
                          "eth2": {"ip": "192.168.10.1/24", "zone": "inside", "description": "office LAN"}},
           "rules": [], "nat": [{"type": "masquerade", "from": "inside", "to": "outside"}]}
     office = {
-        "dhcp": {"enabled": True, "start": "192.168.10.100", "end": "192.168.10.199", "mask": "255.255.255.0", "gateway": "192.168.10.1",
-                 "dns": "192.168.10.5", "domain": "office.lab", "tftp": "192.168.10.5", "lease": "8h", "reservations": []},
+        "dhcp": {"enabled": True, "domain": "office.lab", "tftp": "192.168.10.5", "lease": "8h", "reservations": [],
+                 "pools": [{"name": "office", "start": "192.168.10.100", "end": "192.168.10.199", "mask": "255.255.255.0",
+                            "gateway": "192.168.10.1", "dns": "192.168.10.5"}]},
         "dns": {"enabled": True, "records": [{"name": "srv1.office.lab", "type": "A", "ip": "192.168.10.5"},
                                              {"name": "intranet.office.lab", "type": "CNAME", "target": "srv1.office.lab"},
                                              {"name": "www.example.net", "type": "A", "ip": "198.51.100.10"}]},
@@ -379,6 +391,84 @@ def small_office(name):
 
 
 
+def nat_acl_edge(name):
+    """CCNA-style branch edge: PAT for the LAN, a web server published with static port NAT,
+    and an extended ACL on the outside interface (only the published port, return traffic
+    and ping replies get in)."""
+    r1 = {"chassis": "router-2s",
+          "acls": {"1": {"type": "standard", "entries": [{"seq": 10, "text": "permit 192.168.1.0 0.0.0.255"}]},
+                   "OUTSIDE-IN": {"type": "extended", "entries": [
+                       {"seq": 10, "text": "remark published web server and return traffic only"},
+                       {"seq": 20, "text": "permit tcp any host 203.0.113.2 eq www"},
+                       {"seq": 30, "text": "permit tcp any any established"},
+                       {"seq": 40, "text": "permit udp any eq domain any"},
+                       {"seq": 50, "text": "permit icmp any any echo-reply"},
+                       {"seq": 60, "text": "permit icmp any any unreachable"},
+                       {"seq": 70, "text": "permit icmp any any time-exceeded"},
+                       {"seq": 80, "text": "deny ip any any log"}]}},
+          "ifcfg": {"eth1": {"nat": "outside", "acl_in": "OUTSIDE-IN"}, "eth2": {"nat": "inside"}},
+          "nat": {"pools": {}, "rules": [{"type": "list", "acl": "1", "interface": "eth1", "overload": True},
+                                         {"type": "static-port", "proto": "tcp", "local": "192.168.1.20", "lport": 80, "interface": "eth1", "gport": 80}]}}
+    dns = [{"name": "www.example.net", "type": "A", "ip": "198.51.100.10"}, {"name": "shop.branch.example", "type": "A", "ip": "203.0.113.2"}]
+    nodes = [_node("isp1", "router", 440, -220, chassis="router-2s"),
+             _host("inet", "server", 760, -220, "198.51.100.10/24", "198.51.100.1",
+                   services=_web("www.example.net", "An internet web server, reached through r1's PAT.", dns)),
+             _node("r1", "router", 440, -20, **r1),
+             _node("sw1", "switch", 440, 180, chassis="switch-24", modules={"1/1": "up-4gsfp"}, stp=True,
+                   vlans=[{"id": 1, "name": "default"}], svi={"vlan": 1, "ip": "192.168.1.2/24", "gateway": "192.168.1.1"}),
+             _host("web1", "server", 760, 180, "192.168.1.20/24", "192.168.1.1", "198.51.100.10",
+                   services=_web("shop.branch.example", "Branch web server, published on r1's outside address with static port NAT.")),
+             _host("pc1", "pc", 260, 380, "192.168.1.10/24", "192.168.1.1", "198.51.100.10"),
+             _host("pc2", "pc", 620, 380, "192.168.1.11/24", "192.168.1.1", "198.51.100.10")]
+    links = [_link("l1", "isp1", "eth1", "r1", "eth1"), _link("l2", "isp1", "eth2", "inet", "eth1"), _link("l3", "r1", "eth2", "sw1", "eth1"),
+             _link("l4", "sw1", "eth2", "web1", "eth1"), _link("l5", "sw1", "eth3", "pc1", "eth1"), _link("l6", "sw1", "eth4", "pc2", "eth1")]
+    files = {"isp1": "frr defaults traditional\nhostname isp1\n!\ninterface eth1\n description to branch r1\n ip address 203.0.113.1/30\nexit\n!\n"
+                     "interface eth2\n description internet\n ip address 198.51.100.1/24\nexit\n!\n",
+             "r1": "frr defaults traditional\nhostname r1\n!\ninterface eth1\n description to ISP (NAT outside)\n ip address 203.0.113.2/30\nexit\n!\n"
+                   "interface eth2\n description branch LAN (NAT inside)\n ip address 192.168.1.1/24\nexit\n!\nip route 0.0.0.0/0 203.0.113.1\n!\n"}
+    ann = [{"id": "ann-lan", "kind": "area", "x": 160, "y": 120, "w": 780, "h": 360, "text": "Branch LAN · 192.168.1.0/24 · NAT inside", "color": "green"},
+           {"id": "ann-out", "kind": "area", "x": 340, "y": -280, "w": 600, "h": 160, "text": "Internet · NAT outside", "color": "red"},
+           {"id": "ann-note", "kind": "note", "x": 980, "y": -140, "w": 300, "h": 190, "color": "yellow",
+            "text": "PCs browse www.example.net through PAT (r1: show ip nat translations). From inet, browse http://shop.branch.example: static NAT to web1. "
+                    "Ping r1 from inet: denied by OUTSIDE-IN (show access-lists for the hit counts). Remove 'permit tcp any any established' and watch browsing break."}]
+    return nodes, links, files, ann
+
+
+def dhcp_relay(name):
+    """One DHCP server for every VLAN: router-on-a-stick with ip helper-address on each
+    user subinterface, and a pool per VLAN on the server."""
+    pools = [{"name": "users", "start": "10.10.10.100", "end": "10.10.10.199", "mask": "255.255.255.0", "gateway": "10.10.10.1", "dns": "10.10.99.10"},
+             {"name": "guests", "start": "10.10.20.100", "end": "10.10.20.199", "mask": "255.255.255.0", "gateway": "10.10.20.1", "dns": "10.10.99.10"}]
+    srv = {"dhcp": {"enabled": True, "lease": "4h", "domain": "campus.lab", "reservations": [], "pools": pools},
+           "dns": {"enabled": True, "records": [{"name": "srv1.campus.lab", "type": "A", "ip": "10.10.99.10"},
+                                                {"name": "intranet.campus.lab", "type": "CNAME", "target": "srv1.campus.lab"}]},
+           "http": {"enabled": True, "index_html": _page("intranet.campus.lab", "Every VLAN gets its address from this one server, relayed by r1.")},
+           "syslog": {"enabled": True}}
+    tr = {"mode": "trunk", "native": 1, "allowed": "10,20,99"}
+    sw = {"chassis": "switch-24", "modules": {"1/1": "up-4gsfp"}, "stp": True,
+          "vlans": [{"id": 1, "name": "default"}, {"id": 10, "name": "USERS"}, {"id": 20, "name": "GUESTS"}, {"id": 99, "name": "SERVERS"}],
+          "ports": {"eth1": tr, "eth2": {"mode": "access", "vlan": 99}, "eth3": {"mode": "access", "vlan": 10}, "eth4": {"mode": "access", "vlan": 10},
+                    "eth5": {"mode": "access", "vlan": 20}},
+          "svi": {"vlan": 99, "ip": "10.10.99.2/24", "gateway": "10.10.99.1"}}
+    r1 = {"chassis": "router-3s", "subifs": [{"parent": "eth1", "vlan": 10}, {"parent": "eth1", "vlan": 20}, {"parent": "eth1", "vlan": 99}],
+          "ifcfg": {"eth1.10": {"helpers": ["10.10.99.10"]}, "eth1.20": {"helpers": ["10.10.99.10"]}}}
+    nodes = [_node("r1", "router", 440, -40, **r1), _node("sw1", "switch", 440, 160, **sw),
+             _host("srv1", "server", 760, 160, "10.10.99.10/24", "10.10.99.1", "10.10.99.10", services=srv),
+             _host("pc1", "pc", 160, 380), _host("pc2", "pc", 380, 380), _host("laptop1", "pc", 620, 380, model="laptop")]
+    links = [_link("l1", "r1", "eth1", "sw1", "eth1"), _link("l2", "sw1", "eth2", "srv1", "eth1"), _link("l3", "sw1", "eth3", "pc1", "eth1"),
+             _link("l4", "sw1", "eth4", "pc2", "eth1"), _link("l5", "sw1", "eth5", "laptop1", "eth1")]
+    files = {"r1": _rtr("r1", "10.255.255.1", [("eth1.10", "10.10.10.1/24", "VLAN 10 USERS", set()), ("eth1.20", "10.10.20.1/24", "VLAN 20 GUESTS", set()),
+                                                ("eth1.99", "10.10.99.1/24", "VLAN 99 SERVERS", set())])}
+    ann = [{"id": "ann-u", "kind": "area", "x": 80, "y": 320, "w": 420, "h": 160, "text": "VLAN 10 USERS · 10.10.10.0/24", "color": "green"},
+           {"id": "ann-g", "kind": "area", "x": 540, "y": 320, "w": 200, "h": 160, "text": "VLAN 20 GUESTS", "color": "orange"},
+           {"id": "ann-s", "kind": "area", "x": 680, "y": 100, "w": 200, "h": 160, "text": "VLAN 99 SERVERS", "color": "purple"},
+           {"id": "ann-note", "kind": "note", "x": 900, "y": -100, "w": 300, "h": 170, "color": "yellow",
+            "text": "PCs in VLAN 10 and 20 get addresses from srv1 in VLAN 99: r1 relays their broadcasts (ip helper-address on Gi0/0/0.10 and .20). "
+                    "srv1 → Services → DHCP shows a pool per VLAN and the leases. Remove a helper and that VLAN stops getting addresses."}]
+    return nodes, links, files, ann
+
+
+
 TEMPLATES = {
     "ospf-triangle": {"title": "OSPF triangle", "fn": ospf_triangle, "devices": 5,
                       "desc": "Three routers in area 0 with loopback router IDs, a PC and a DNS/web server. Fail a link and watch OSPF reroute."},
@@ -394,6 +484,10 @@ TEMPLATES = {
                    "desc": "Three switches in a loop with STP (sw1 root), two VLANs, inter-VLAN routing and an intranet server."},
     "campus-rstp-lacp": {"title": "Campus RSTP + LACP (OVS)", "fn": campus_rstp_lacp, "devices": 8,
                          "desc": "Open vSwitch campus: LACP port-channel between distribution switches, dual-homed access, RSTP, inter-VLAN routing."},
+    "nat-acl-edge": {"title": "NAT and ACLs at the edge", "fn": nat_acl_edge, "devices": 7,
+                     "desc": "Branch router with PAT, a web server published by static port NAT, and an extended ACL on the outside interface (CCNA style)."},
+    "dhcp-relay": {"title": "Central DHCP with relay", "fn": dhcp_relay, "devices": 6,
+                   "desc": "One server hands out addresses to every VLAN: router-on-a-stick with ip helper-address, a DHCP pool per VLAN."},
     "small-office": {"title": "Small office", "fn": small_office, "devices": 8,
                      "desc": "Firewall with PAT, one server doing DHCP, DNS, web, FTP, TFTP, syslog and NTP for DHCP clients, plus an internet web server."},
     "firewall-edge": {"title": "Firewall edge with DMZ", "fn": firewall_edge, "devices": 7,
@@ -403,8 +497,13 @@ TEMPLATES = {
 }
 
 
+NEEDS = {"isp-mpls": ["mpls", "vrf"], "campus-rstp-lacp": ["ovs", "vlan"], "router-on-a-stick": ["vlan"], "campus-stp": ["vlan"],
+         "firewall-edge": ["nftables"], "small-office": ["nftables"], "serial-wan": ["netem"],
+         "nat-acl-edge": ["nftables"], "dhcp-relay": ["vlan"]}
+
+
 def list_templates():
-    return [{"id": k, "title": v["title"], "desc": v["desc"], "devices": v["devices"]} for k, v in TEMPLATES.items()]
+    return [{"id": k, "title": v["title"], "desc": v["desc"], "devices": v["devices"], "needs": NEEDS.get(k, [])} for k, v in TEMPLATES.items()]
 
 
 def create(tid: str, name: str) -> dict:

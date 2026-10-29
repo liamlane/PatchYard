@@ -19,6 +19,7 @@ jobs:
         with: { python-version: "3.12", cache: pip, cache-dependency-path: app/backend/requirements*.txt }
       - run: pip install -r app/backend/requirements-dev.txt
       - run: pytest -q tests
+      - run: bash -n deploy/install.sh && bash -n deploy/update.sh && bash -n deploy/uninstall.sh && bash -n tools/patchyard-preflight.sh
       - uses: actions/setup-node@v4
         with: { node-version: "20", cache: npm, cache-dependency-path: app/frontend/package-lock.json }
       - run: npm ci --no-audit --no-fund && npm run build
@@ -41,7 +42,7 @@ jobs:
       - id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository_owner }}/netlab
+          images: ghcr.io/${{ github.repository_owner }}/patchyard
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=semver,pattern={{version}}
@@ -54,7 +55,31 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            NETLAB_VERSION=${{ github.ref_type == 'tag' && github.ref_name || format('{0}+main.{1}', steps.ver.outputs.v, github.run_number) }}
-            NETLAB_COMMIT=${{ github.sha }}
+            PATCHYARD_VERSION=${{ github.ref_type == 'tag' && github.ref_name || format('{0}+main.{1}', steps.ver.outputs.v, github.run_number) }}
+            PATCHYARD_COMMIT=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  # Tag a release (git tag v0.12.0 && git push --tags, or create the tag in GitHub Desktop / on github.com)
+  # and this publishes the GitHub release with the changelog section and the installer attached.
+  release:
+    needs: image
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Release notes from CHANGELOG.md
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          awk -v v="$v" '$0 ~ "^## "v"( |$)" {on=1; next} on && /^## / {exit} on' CHANGELOG.md > notes.md
+          printf '\n---\nInstall: `curl -fsSL https://raw.githubusercontent.com/%s/%s/deploy/install.sh | sudo bash`\nImage: `ghcr.io/%s/patchyard:%s`\n' \
+            "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME" "$GITHUB_REPOSITORY_OWNER" "$v" >> notes.md
+          cat notes.md
+      - uses: softprops/action-gh-release@v2
+        with:
+          body_path: notes.md
+          files: |
+            deploy/install.sh
+            deploy/docker-compose.yml

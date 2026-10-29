@@ -10,7 +10,9 @@ import LinkPanel from "./LinkPanel.jsx";
 import LabManager, { MiniTopo } from "./LabManager.jsx";
 import Palette from "./Palette.jsx";
 import Settings from "./Settings.jsx";
-import { NotificationsPanel, TrafficPanel, Login } from "./Notifications.jsx";
+import { NotificationsPanel, TrafficPanel, Login, InvitePage } from "./Notifications.jsx";
+import Admin from "./Admin.jsx";
+import { setMe } from "./me.js";
 import { PortMenu } from "./Hardware.jsx";
 import { setCatalogue, portsOf, defaultHardware, labIf } from "./hw.js";
 import { Icon, TB, Toasts, Modal, Menu, fmtBps } from "./ui.jsx";
@@ -58,7 +60,9 @@ function Workspace() {
   const [overlay, setOverlay] = useState(() => store.get("netlab.overlay", true));
   const [side, setSide] = useState(null);           // null | "dash" | "alerts" | "traffic"
   const [appSettings, setAppSettings] = useState(null);
-  const [auth, setAuth] = useState({ checked: false, need: false });
+  const [auth, setAuth] = useState({ checked: false, need: false, user: null });
+  const [admin, setAdmin] = useState(false);
+  const [acct, setAcct] = useState(false);
   const [alertSum, setAlertSum] = useState(null);
   const lastEid = useRef(-1);
   const [settingsTab, setSettingsTab] = useState(null);
@@ -106,8 +110,9 @@ function Workspace() {
   }, []);
   const refreshLabs = useCallback(() => api.labs().then(setLabs).catch((e) => notify(e.message, null, "bad")), [notify]);
   useEffect(() => {
-    api.authState().then((a) => setAuth({ checked: true, need: a.enabled && !a.logged_in })).catch(() => setAuth({ checked: true, need: false }));
-    const h = () => setAuth({ checked: true, need: true });
+    api.authState().then((a) => { setMe(a.user); setAuth({ checked: true, need: a.enabled && !a.logged_in, user: a.user, multi: a.multi_user }); })
+      .catch(() => setAuth({ checked: true, need: false, user: null }));
+    const h = () => setAuth((x) => ({ ...x, checked: true, need: true }));
     window.addEventListener("netlab-auth", h);
     return () => window.removeEventListener("netlab-auth", h);
   }, []);
@@ -621,14 +626,17 @@ function Workspace() {
   const devSel = selDevices().length;
   const sideOpen = sim ? "sim" : side;
 
-  if (auth.need) return <><Login onDone={() => { setAuth({ checked: true, need: false }); }} /><Toasts items={toasts} onClose={(id) => setToasts((x) => x.filter((t) => t.id !== id))} /></>;
+  const invite = location.pathname.match(/^\/invite\/([\w-]+)$/);
+  if (invite) return <InvitePage token={invite[1]} />;
+  if (auth.need) return <><Login onDone={() => { api.authState().then((a) => { setMe(a.user); setAuth({ checked: true, need: false, user: a.user, multi: a.multi_user }); }); }} /><Toasts items={toasts} onClose={(id) => setToasts((x) => x.filter((t) => t.id !== id))} /></>;
+  const me = auth.user;
   return (
     <div className={`app ${sideOpen ? `app-side app-${sideOpen}` : ""}`}>
       <header className="top">
-        <div className="brand"><svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="3" /><circle cx="19" cy="5" r="3" /><circle cx="19" cy="19" r="3" /><path d="M7.6 10.6l8.8-4.2M7.6 13.4l8.8 4.2" /></svg>netlab</div>
+        <div className="brand"><svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="3" /><circle cx="19" cy="5" r="3" /><circle cx="19" cy="19" r="3" /><path d="M7.6 10.6l8.8-4.2M7.6 13.4l8.8 4.2" /></svg>Patchyard</div>
         <select className="labsel" value={lab?.name || ""} onChange={(e) => openLab(e.target.value)} aria-label="Lab">
           <option value="">Choose a lab…</option>
-          {labs.map((l) => <option key={l.name} value={l.name}>{l.name} ({l.nodes})</option>)}
+          {labs.map((l) => <option key={l.name} value={l.name}>{l.name} ({l.nodes}){me && l.owner && l.owner !== me.name ? ` · ${l.owner}` : ""}</option>)}
         </select>
         <TB icon="plus" label="New lab" onClick={newLab} />
         <TB icon="layers" label="Lab manager" onClick={() => setMgr(lab ? "snapshots" : "templates")} />
@@ -663,6 +671,17 @@ function Workspace() {
         <TB icon="gear" label="Settings" kbd="," onClick={() => setSettingsTab("general")} />
         <TB icon={theme === "dark" ? "sun" : "moon"} label={theme === "dark" ? "Light mode" : "Dark mode"} kbd="T" onClick={() => setTheme(theme === "dark" ? "light" : "dark")} />
         <TB icon="keyboard" label="Keyboard shortcuts" kbd="?" onClick={() => setHelp(true)} />
+        {me && auth.multi !== undefined && (
+          <div className="acct">
+            <button className={`tb acct-btn ${acct ? "on" : ""}`} onClick={() => setAcct(!acct)} aria-haspopup="menu" aria-expanded={acct} title="Your account">
+              <span className="avatar">{me.name.slice(0, 1).toUpperCase()}</span><span className="tb-text">{me.name}</span></button>
+            {acct && <div className="acct-menu" role="menu" onMouseLeave={() => setAcct(false)}>
+              <div className="hint">Signed in as <b>{me.name}</b>{me.role === "admin" ? " (admin)" : ""}</div>
+              {me.role === "admin" && <button role="menuitem" onClick={() => { setAcct(false); setAdmin(true); }}><Icon name="grid" size={15} /> Admin: users, invites, labs</button>}
+              <button role="menuitem" onClick={() => { setAcct(false); setSettingsTab("security"); }}><Icon name="keyboard" size={15} /> Change password</button>
+              <button role="menuitem" onClick={async () => { await api.logout(); location.href = "/"; }}><Icon name="x" size={15} /> Sign out</button>
+            </div>}
+          </div>)}
       </header>
 
       <aside className="palette" aria-label="Devices and tools">
@@ -785,7 +804,8 @@ function Workspace() {
       {mgr && <LabManager lab={lab} deployed={deployed} initial={mgr} notify={notify} onOpenLab={openLab} onClose={() => setMgr(null)} refreshLabs={refreshLabs}
         onReload={async () => setLab(await api.get(lab.name))} onRedeploy={doDeploy} />}
       {help && <Help onClose={() => setHelp(false)} />}
-      {settingsTab && <Settings initial={settingsTab} onClose={() => setSettingsTab(null)} notify={notify} labs={labs} lab={lab} onSaved={setAppSettings}
+      {admin && <Admin onClose={() => { setAdmin(false); refreshLabs(); }} notify={notify} me={me} onOpenLab={openLab} />}
+      {settingsTab && <Settings initial={settingsTab} me={me} onClose={() => setSettingsTab(null)} notify={notify} labs={labs} lab={lab} onSaved={setAppSettings}
         appearance={{ theme, setTheme, overlay, setOverlay, showIf, setShowIf, snap, setSnap }} />}
       {busy && <div className="busy" role="status"><div className="spinner" /><p>{busy}</p></div>}
     </div>

@@ -287,6 +287,12 @@ class Env:
         n = next(x for x in d["nodes"] if x["id"] == self.node_id)
         return await devices.apply_switch(d, n)
 
+    async def apply_l3(self):
+        from . import l3
+        d = self.load()
+        n = next(x for x in d["nodes"] if x["id"] == self.node_id)
+        return await l3.apply_node(d, n)
+
     async def states(self):
         from .util import container_states
         return await container_states(self.lab)
@@ -337,9 +343,20 @@ HELPS = {
     "console": "Primary terminal line", "vty": "Virtual terminal", "aux": "Auxiliary line", "domain-lookup": "Enable IP Domain Name System hostname translation",
     "domain-name": "Define the default domain name", "routing": "Enable IP routing", "service": "Modify use of network based services",
     "logging": "Modify message logging facilities", "username": "Establish User Name Authentication",
+    "access-list": "Add an access list entry", "access-lists": "List access lists", "access-group": "Specify access control for packets",
+    "nat": "NAT configuration commands", "helper-address": "Specify a destination address for UDP broadcasts (DHCP relay)",
+    "inside": "Inside address translation", "outside": "Outside address translation",
+    "static": "Specify static local->global mapping", "pool": "Define pool of addresses", "overload": "Overload an address translation",
+    "list": "Specify access list describing local addresses", "netmask": "Specify the network mask", "prefix-length": "Specify the prefix length",
+    "permit": "Specify packets to forward", "deny": "Specify packets to reject", "remark": "Access list entry comment",
+    "standard": "Standard Access List", "extended": "Extended Access List", "rd": "Specify Route Distinguisher",
+    "route-target": "Specify Target VPN Extended Communities", "definition": "VRF definition", "forwarding": "Configure forwarding table",
+    "translations": "Translation entries", "statistics": "Translation statistics", "clear": "Reset functions", "counters": "Clear access list counters",
+    "translation": "Clear dynamic translation",
 }
 SUFFIX = {"config": "(config)", "if": "(config-if)", "subif": "(config-subif)", "if-range": "(config-if-range)", "ospf": "(config-router)",
-          "bgp": "(config-router)", "bgp-af": "(config-router-af)", "line": "(config-line)", "vlan": "(config-vlan)", "svi": "(config-if)"}
+          "bgp": "(config-router)", "bgp-af": "(config-router-af)", "line": "(config-line)", "vlan": "(config-vlan)", "svi": "(config-if)",
+          "acl-std": "(config-std-nacl)", "acl-ext": "(config-ext-nacl)", "vrf": "(config-vrf)", "vrf-af": "(config-vrf-af)"}
 ACCEPT_ONLY = ("service", "logging", "ntp", "ip domain-lookup", "ip domain-name", "ip domain lookup", "ip name-server", "ip ssh",
                "crypto", "username", "ip http", "cdp", "lldp", "clock", "snmp-server", "aaa", "vtp", "boot", "license", "ip cef",
                "ip routing", "ipv6 cef", "mpls label protocol", "errdisable", "archive")
@@ -416,7 +433,7 @@ class Session:
         m = _PO.fullmatch(text.replace(" ", ""))
         if m:
             if self.kind != "switch" or self.props.get("engine") != "ovs":
-                raise CmdError("% netlab: port-channels need a switch on the Open vSwitch engine (Config → Global)")
+                raise CmdError("% patchyard: port-channels need a switch on the Open vSwitch engine (Config → Global)")
             return f"po{int(m.group(1))}"
         try:
             return hardware.resolve(self.node, text)
@@ -661,7 +678,7 @@ class Session:
                 raise
             await self.w("\n")
         except Exception as e:  # never kill the console
-            await self.say(f"% netlab: {type(e).__name__}: {e}")
+            await self.say(f"% patchyard: {type(e).__name__}: {e}")
         finally:
             self.cur = None
         return None
@@ -824,8 +841,10 @@ async def h_logout(s, a, neg):
 async def h_exit(s, a, neg):
     if s.mode == "exec":
         return "logout"
-    if s.mode in ("if", "subif", "if-range", "ospf", "bgp", "line", "vlan", "svi"):
+    if s.mode in ("if", "subif", "if-range", "ospf", "bgp", "line", "vlan", "svi", "acl-std", "acl-ext", "vrf"):
         s.mode, s.ctx, s.data = "config", [], {}
+    elif s.mode == "vrf-af":
+        s.mode = "vrf"
     elif s.mode == "bgp-af":
         s.mode, s.ctx = "bgp", [s.data.get("bgp_ctx") or s.ctx[0]]
     else:
@@ -866,8 +885,8 @@ async def h_show_version(s, a, neg):
     for p in ps:
         k = hardware.PORT_TYPES[p["type"]]["long"]
         counts[k] = counts.get(k, 0) + 1
-    lines = [f"netlab IOS-style CLI on {sw}", "",
-             f"{s.host} is a netlab {s.kind}" + (f", model {ch['label']} ({s.props.get('chassis')})" if ch else " (generic, ports added as cabled)"),
+    lines = [f"Patchyard IOS-style CLI on {sw}", "",
+             f"{s.host} is a Patchyard {s.kind}" + (f", model {ch['label']} ({s.props.get('chassis')})" if ch else " (generic, ports added as cabled)"),
              ""]
     lines += [f"{n} {k} interface{'s' if n > 1 else ''}" for k, n in counts.items()]
     lines += ["", "Commands are translated to " + ("FRR (vtysh)." if s.kind == "router" else "the switch's VLAN/STP settings."),
@@ -878,7 +897,7 @@ async def h_show_version(s, a, neg):
 async def h_show_inventory(s, a, neg):
     ch = hardware.chassis_of(s.node)
     if not ch:
-        return await s.say(f'NAME: "Chassis", DESCR: "netlab {s.kind} (generic)"\nPID: generic\n')
+        return await s.say(f'NAME: "Chassis", DESCR: "Patchyard {s.kind} (generic)"\nPID: generic\n')
     out = [f'NAME: "Chassis", DESCR: "{ch["label"]}"', f"PID: {s.props.get('chassis')}", ""]
     for sid, mid in sorted((s.props.get("modules") or {}).items()):
         if mid in hardware.MODULES:
@@ -898,10 +917,10 @@ async def h_show_cdp(s, a, neg):
             if not pn or st.get(pn["id"]) != "running" or l.get("admin") == "down":
                 continue
             cap = {"router": "R", "switch": "S I", "pc": "H", "server": "H"}.get(pn["type"], "H")
-            plat = (pn.get("props") or {}).get("chassis") or f"netlab-{pn['type']}"
+            plat = (pn.get("props") or {}).get("chassis") or f"patchyard-{pn['type']}"
             rows.append((pn["id"], s.short(l[f"{me}_if"]), cap, plat, hardware.display(pn, l[f"{peer}_if"])))
     hdr = ("Capability Codes: R - Router, S - Switch, H - Host, I - IGMP\n"
-           "(netlab: built from the lab's cabling, not from CDP packets)\n\n"
+           "(patchyard: built from the lab's cabling, not from CDP packets)\n\n"
            f"{'Device ID':<17}{'Local Intrfce':<18}{'Holdtme':<9}{'Capability':<12}{'Platform':<13}Port ID")
     body = [f"{d:<17}{li:<18}{'150':<9}{c:<12}{p[:12]:<13}{pi}" for d, li, c, p, pi in sorted(rows)]
     await s.say(hdr + "\n" + "\n".join(body) + f"\n\nTotal cdp entries displayed : {len(rows)}\n")
@@ -996,7 +1015,7 @@ async def h_reload(s, a, neg):
     ans = await s.readline("Proceed with reload? [confirm]", help_ok=False)
     if ans.strip().lower() not in ("", "y", "yes"):
         return
-    await s.say(f"\n%SYS-5-RELOAD: Reload requested by console. Reload Reason: Reload Command.\n(netlab: powering {s.env.node_id} off and on; unsaved config is lost)")
+    await s.say(f"\n%SYS-5-RELOAD: Reload requested by console. Reload Reason: Reload Command.\n(patchyard: powering {s.env.node_id} off and on; unsaved config is lost)")
     r = await s.env.power_cycle()
     await s.say(r.get("output", ""))
     s.refresh()
@@ -1067,7 +1086,7 @@ async def h_copy(s, a, neg):
     up = _tftp_url(dst.lower()) if (is_cfg(src, "running-config") or is_cfg(src, "startup-config")) else None
     down = _tftp_url(src.lower()) if is_cfg(dst, "running-config") else None
     if up is None and down is None:
-        raise CmdError("% netlab: supported: copy running-config|startup-config tftp:, copy tftp: running-config, copy running-config startup-config")
+        raise CmdError("% patchyard: supported: copy running-config|startup-config tftp:, copy tftp: running-config, copy running-config startup-config")
     host, fname = up if up is not None else down
     if not host:
         host = (await s.readline("Address or name of remote host []? ", help_ok=False)).strip()
@@ -1181,14 +1200,14 @@ async def h_line_cmd(s, a, neg):
 
 def unsupported(what):
     async def h(s, a, neg):
-        raise CmdError(f"% netlab: {what}")
+        raise CmdError(f"% patchyard: {what}")
     return h
 
 
 async def h_speed(s, a, neg):
     p = hardware.port_map(s.node).get(s.data.get("ifn", ""))
     sp = hardware.fmt_speed(p["kbit"]) if p else "set by the cable"
-    await s.say(f"% netlab: speed and duplex are fixed by the port type ({sp}, full duplex)")
+    await s.say(f"% patchyard: speed and duplex are fixed by the port type ({sp}, full duplex)")
 
 
 async def h_no(s, a, neg):
@@ -1394,7 +1413,7 @@ async def r_interface(s, a, neg):
             return
         raise CmdError("% Physical interfaces can't be removed")
     if ifn.startswith("vlan"):
-        raise CmdError("% netlab routers have no VLAN interfaces; use a subinterface (interface Gi0/0/0.10 + encapsulation dot1Q 10)")
+        raise CmdError("% Patchyard routers have no VLAN interfaces; use a subinterface (interface Gi0/0/0.10 + encapsulation dot1Q 10)")
     if ifn.startswith("loop"):
         n = int(ifn[4:])
         if n not in [int(x) for x in s.props.get("loopbacks", [])]:
@@ -1461,7 +1480,7 @@ async def r_encap(s, a, neg):
     rc, out, err = await s.env.io.ns("ip", "link", "add", "link", base, "name", ifn, "type", "vlan", "id", str(vid))
     if rc and "File exists" not in err:
         if "Cannot find device" in err:
-            await s.say(f"% netlab: saved; {s.ifname(base)} isn't cabled yet, the subinterface is created when it is")
+            await s.say(f"% patchyard: saved; {s.ifname(base)} isn't cabled yet, the subinterface is created when it is")
         else:
             await s.say(f"% {err.strip()}")
     await s.env.io.ns("ip", "link", "set", ifn, "up")
@@ -1485,7 +1504,7 @@ async def r_mpls_ip(s, a, neg):
     if "\nmpls ldp" not in run:
         rid = await _loopback_ip(s)
         if not rid:
-            raise CmdError("% netlab: give Loopback0 a /32 address first; LDP uses it as router-id and transport address")
+            raise CmdError("% patchyard: give Loopback0 a /32 address first; LDP uses it as router-id and transport address")
         await s.frr_do(f"router-id {rid}", ctx=["mpls ldp"])
         await s.frr_do(f"discovery transport-address {rid}", ctx=["mpls ldp", "address-family ipv4"])
     await s.env.io.ns("sh", "-c", f"[ -e /proc/sys/net/mpls/conf/{ifn}/input ] && echo 1 > /proc/sys/net/mpls/conf/{ifn}/input; true")
@@ -1506,7 +1525,7 @@ async def _loopback_ip(s):
 async def r_ldp_rid(s, a, neg):
     ifn = s.resolve(a[0])
     if ifn != "lo":
-        raise CmdError("% netlab: use Loopback0 as the LDP router-id")
+        raise CmdError("% patchyard: use Loopback0 as the LDP router-id")
     rid = await _loopback_ip(s)
     if not rid:
         raise CmdError("% Loopback0 has no /32 address")
@@ -1576,6 +1595,8 @@ async def r_bgp_af(s, a, neg, kind="ipv4"):
     if await s.frr_do(ctx[1], ctx=ctx[:1]):
         s.mode, s.ctx = "bgp-af", ctx
         s.data = {"asn": asn, "bgp_ctx": f"router bgp {asn}"}
+        if kind == "vrf":
+            await vrf_sync_bgp(s, str(a[0]))
 
 
 def bgp_af(kind):
@@ -1646,9 +1667,9 @@ async def sw_interface(s, a, neg):
         s.mode, s.data = "svi", {"vid": int(ifn[4:])}
         return
     if ifn.startswith("lo") or "." in ifn:
-        raise CmdError("% netlab switches support physical ports and one management Vlan interface")
+        raise CmdError("% Patchyard switches support physical ports and one management Vlan interface")
     if ifn.startswith("po") and not any((c or {}).get("channel") == int(ifn[2:]) for c in (s.props.get("ports") or {}).values()):
-        await s.say(f"% netlab: Port-channel{ifn[2:]} has no members yet; add them with 'channel-group {ifn[2:]} mode active'")
+        await s.say(f"% patchyard: Port-channel{ifn[2:]} has no members yet; add them with 'channel-group {ifn[2:]} mode active'")
     s.mode, s.data = "if", {"ifn": ifn}
 
 
@@ -1737,7 +1758,7 @@ async def sw_trunk_allowed(s, a, neg):
                 new = vlan_set(words[0])
             c["allowed"] = "" if len(set(new)) == 4094 else vlan_text(new) or "none"
             if c["allowed"] == "none":
-                raise CmdError("% netlab: a trunk needs at least one allowed VLAN")
+                raise CmdError("% patchyard: a trunk needs at least one allowed VLAN")
             ports[i] = c
         p["ports"] = ports
     await sw_commit(s, fn)
@@ -1790,7 +1811,7 @@ async def sw_portfast(s, a, neg):
         p["ports"] = ports
     s.patch(fn)
     if not neg:
-        await s.say("% netlab: portfast stored, but the kernel bridge has no portfast; ports still take ~30 s to forward with STP on")
+        await s.say("% patchyard: portfast stored, but the kernel bridge has no portfast; ports still take ~30 s to forward with STP on")
 
 
 async def sw_vlan(s, a, neg):
@@ -1832,7 +1853,7 @@ async def sw_svi_ip(s, a, neg):
         raise CmdError(f"% Bad mask {a[1]} for address {a[0]}")
     cur = s.props.get("svi") or {}
     if cur.get("ip") and int(cur.get("vlan") or 1) != vid:
-        await s.say(f"% netlab: a netlab switch has one management SVI; moving it from Vlan{cur.get('vlan')} to Vlan{vid}")
+        await s.say(f"% patchyard: a Patchyard switch has one management SVI; moving it from Vlan{cur.get('vlan')} to Vlan{vid}")
     def fn(p):
         _ensure_vlan(p, vid)
         p["svi"] = {**(p.get("svi") or {}), "vlan": vid, "ip": f"{a[0]}/{plen}"}
@@ -1841,7 +1862,7 @@ async def sw_svi_ip(s, a, neg):
 
 async def sw_svi_shut(s, a, neg):
     if not neg:
-        await s.say("% netlab: the management SVI can't be shut; remove its address with 'no ip address' instead")
+        await s.say("% patchyard: the management SVI can't be shut; remove its address with 'no ip address' instead")
 
 
 async def sw_default_gw(s, a, neg):
@@ -1859,7 +1880,7 @@ async def sw_stp_prio(s, a, neg):
     if prio % 4096:
         raise CmdError("% Bridge Priority must be in increments of 4096.\n% Allowed values are:\n  0     4096  8192  12288 16384 20480 24576 28672\n  32768 36864 40960 45056 49152 53248 57344 61440")
     await sw_commit(s, lambda p: (p.__setitem__("stp_priority", prio), p.__setitem__("stp", True)))
-    await s.say("% netlab: one spanning tree for all VLANs (kernel 802.1D); the priority applies to the whole switch")
+    await s.say("% patchyard: one spanning tree for all VLANs (kernel 802.1D); the priority applies to the whole switch")
 
 
 async def sw_stp_mode(s, a, neg):
@@ -1867,16 +1888,16 @@ async def sw_stp_mode(s, a, neg):
     ovs = s.props.get("engine") == "ovs"
     await sw_commit(s, lambda p: p.__setitem__("stp", not neg))
     if ovs and mode.startswith("mst"):
-        await s.say("% netlab: MST isn't available; this switch runs RSTP (one instance, Open vSwitch)")
+        await s.say("% patchyard: MST isn't available; this switch runs RSTP (one instance, Open vSwitch)")
     elif ovs and mode not in ("rapid-pvst", "pvst", ""):
-        await s.say(f"% netlab: {mode} isn't available; running RSTP")
+        await s.say(f"% patchyard: {mode} isn't available; running RSTP")
     elif not ovs and mode and mode != "pvst":
-        await s.say(f"% netlab: {mode} needs the Open vSwitch engine (Config → Global → Switch engine); this switch runs 802.1D")
+        await s.say(f"% patchyard: {mode} needs the Open vSwitch engine (Config → Global → Switch engine); this switch runs 802.1D")
 
 
 async def sw_channel_group(s, a, neg):
     if s.props.get("engine") != "ovs":
-        raise CmdError("% netlab: EtherChannel needs the Open vSwitch engine (Config → Global → Switch engine)")
+        raise CmdError("% patchyard: EtherChannel needs the Open vSwitch engine (Config → Global → Switch engine)")
     ifs = _sw_ifs(s)
     if any(i.startswith("po") for i in ifs):
         raise CmdError("% channel-group goes on the member ports, not the port-channel")
@@ -1885,7 +1906,7 @@ async def sw_channel_group(s, a, neg):
     n = int(a[0]) if a else 0
     mode = str(a[1]).lower() if len(a) > 1 else "active"
     if mode not in ("active", "passive", "on"):
-        raise CmdError("% netlab: modes are active, passive (LACP) or on (static)")
+        raise CmdError("% patchyard: modes are active, passive (LACP) or on (static)")
     def fn(p):
         ports = dict(p.get("ports") or {})
         for i in ifs:
@@ -1908,7 +1929,7 @@ async def sw_channel_group(s, a, neg):
 async def sw_show_etherchannel(s, a, neg):
     p = s.props
     if p.get("engine") != "ovs":
-        return await s.say("% netlab: EtherChannel needs the Open vSwitch engine")
+        return await s.say("% patchyard: EtherChannel needs the Open vSwitch engine")
     groups = {}
     for i, c in (p.get("ports") or {}).items():
         if (c or {}).get("channel"):
@@ -1940,7 +1961,7 @@ async def sw_stp_off(s, a, neg):
 
 
 async def sw_write(s, a, neg):
-    await s.say("Building configuration...\n[OK]\n(netlab: switch settings are saved as you type them)")
+    await s.say("Building configuration...\n[OK]\n(patchyard: switch settings are saved as you type them)")
 
 
 async def sw_show_run(s, a, neg):
@@ -2043,7 +2064,7 @@ async def sw_show_stp(s, a, neg):
         if not p.get("stp"):
             return await s.say("No spanning tree instance exists.")
         rc, out, _ = await s.env.io.sh("ovs-appctl rstp/show br0 2>&1")
-        return await s.say("VLAN0001  (netlab: Open vSwitch RSTP, one instance for all VLANs)\n  Spanning tree enabled protocol rstp\n\n" + s.tr_out(out))
+        return await s.say("VLAN0001  (patchyard: Open vSwitch RSTP, one instance for all VLANs)\n  Spanning tree enabled protocol rstp\n\n" + s.tr_out(out))
     if not p.get("stp"):
         return await s.say("No spanning tree instance exists.")
     script = ("cd /sys/class/net/br0/bridge && echo $(cat root_id) $(cat bridge_id) $(cat root_port) $(cat root_path_cost) "
@@ -2073,7 +2094,7 @@ async def sw_show_stp(s, a, neg):
         role = "Root" if str(pno) == str(int(rport, 16) if rport.startswith("0x") else rport) and rport not in ("0", "0x0") else ("Altn" if st == 4 else "Desg")
         rows.append(f"{s.short(ifn):<20}{role:<5}{states.get(st, '?'):<4}{cost:<10}{'128.' + str(pno):<9}P2p")
     tick = lambda v: int(int(v) / 100) if v.isdigit() else v
-    out = ["VLAN0001  (netlab: one 802.1D instance covers all VLANs)", "  Spanning tree enabled protocol ieee",
+    out = ["VLAN0001  (patchyard: one 802.1D instance covers all VLANs)", "  Spanning tree enabled protocol ieee",
            f"  Root ID    Priority    {rp}", f"             Address     {rm}"]
     out.append("             This bridge is the root" if root == me else f"             Cost        {rcost}\n             Port        {rport}")
     out += [f"             Hello Time   {tick(hello)} sec  Max Age {tick(maxage)} sec  Forward Delay {tick(fwd)} sec", "",
@@ -2103,6 +2124,460 @@ async def sw_show_int(s, a, neg):
 
 
 # --------------------------------------------------------------------------- config rendering
+
+# ---- router: ACLs, NAT, DHCP relay, VRFs (props + l3.py; applied into the router's namespace)
+def _l3_err(e):
+    msg = str(e)
+    return CmdError(msg if msg.startswith("%") else f"% {msg}")
+
+
+async def l3_apply(s):
+    errs = await s.env.apply_l3()
+    for e in errs or []:
+        await s.say(f"% patchyard: {e}")
+
+
+def _ifcfg_set(s, ifn, key, value):
+    def fn(p):
+        cfg = {k: dict(v) for k, v in (p.get("ifcfg") or {}).items()}
+        c = cfg.setdefault(ifn, {})
+        if value in (None, "", [], False):
+            c.pop(key, None)
+        else:
+            c[key] = value
+        if not c:
+            cfg.pop(ifn, None)
+        p["ifcfg"] = cfg
+    s.patch(fn)
+
+
+def _ifcfg(s, ifn):
+    return dict((s.props.get("ifcfg") or {}).get(ifn) or {})
+
+
+async def r_acl_numbered(s, a, neg):
+    from . import l3
+    num, text = str(a[0]), (str(a[1]) if len(a) > 1 else "")
+    try:
+        l3.acl_kind(num)
+    except l3.AclError as e:
+        raise _l3_err(e)
+    if neg:                                  # IOS: 'no access-list N ...' removes the whole list
+        acls = dict(s.props.get("acls") or {})
+        acls.pop(num, None)
+        s.patch(lambda p: p.__setitem__("acls", acls))
+        return await l3_apply(s)
+    if not text:
+        raise CmdError("% Incomplete command.")
+    try:
+        acls = l3.add_entry(s.props.get("acls") or {}, num, text)
+    except l3.AclError as e:
+        raise _l3_err(e)
+    s.patch(lambda p: p.__setitem__("acls", acls))
+    await l3_apply(s)
+
+
+async def r_ip_acl(s, a, neg, kind="standard"):
+    from . import l3
+    name = str(a[0])
+    try:
+        k = l3.acl_kind(name)
+    except l3.AclError as e:
+        raise _l3_err(e)
+    if k and k != kind:
+        raise CmdError(f"% {name} is a{'n' if k == 'extended' else ''} {k} access list number")
+    acls = dict(s.props.get("acls") or {})
+    if neg:
+        acls.pop(name, None)
+        s.patch(lambda p: p.__setitem__("acls", acls))
+        return await l3_apply(s)
+    if name in acls and acls[name]["type"] != kind:
+        raise CmdError(f"% A {acls[name]['type']} access list named {name} already exists")
+    if name not in acls:
+        acls[name] = {"type": kind, "entries": []}
+        s.patch(lambda p: p.__setitem__("acls", acls))
+    s.mode = "acl-std" if kind == "standard" else "acl-ext"
+    s.ctx, s.data = [], {"acl": name, "kind": kind}
+
+
+def ip_acl(kind):
+    async def h(s, a, neg):
+        return await r_ip_acl(s, a, neg, kind)
+    return h
+
+
+async def r_ace(s, a, neg, action=None):
+    """Inside 'ip access-list': [seq] permit|deny|remark ...; 'no <seq>' or 'no permit ...'."""
+    from . import l3
+    name, kind = s.data["acl"], s.data["kind"]
+    seq = None
+    if action is None:                       # "<seq> ..." or "<seq>" (only with no)
+        seq = int(a[0])
+        text = str(a[1]) if len(a) > 1 else ""
+    else:
+        text = f"{action} {a[0]}" if a else action
+    acls = dict(s.props.get("acls") or {})
+    cur = acls.get(name) or {"type": kind, "entries": []}
+    if neg:
+        ents = cur["entries"]
+        if seq is not None:
+            ents = [e for e in ents if e["seq"] != seq]
+        else:
+            ents = [e for e in ents if e["text"] != " ".join(text.split())]
+        acls[name] = {**cur, "entries": ents}
+        s.patch(lambda p: p.__setitem__("acls", acls))
+        return await l3_apply(s)
+    if not text or text.split()[0].lower() not in ("permit", "deny", "remark"):
+        raise CmdError("% Incomplete command.")
+    try:
+        acls = l3.add_entry(acls, name, text, seq=seq, kind=kind)
+    except l3.AclError as e:
+        raise _l3_err(e)
+    s.patch(lambda p: p.__setitem__("acls", acls))
+    await l3_apply(s)
+
+
+def ace(action):
+    async def h(s, a, neg):
+        return await r_ace(s, a, neg, action)
+    return h
+
+
+async def r_access_group(s, a, neg):
+    from . import l3
+    name, d = str(a[0]), str(a[1]).lower()
+    try:
+        l3.acl_kind(name)
+    except l3.AclError as e:
+        raise _l3_err(e)
+    if d not in ("in", "out"):
+        raise CmdError("% Invalid input: in or out")
+    _ifcfg_set(s, s.data["ifn"], f"acl_{d}", None if neg else name)
+    await l3_apply(s)
+
+
+async def r_ip_nat_if(s, a, neg):
+    side = str(a[0]).lower()
+    if side not in ("inside", "outside"):
+        raise CmdError("% Invalid input: inside or outside")
+    cur = _ifcfg(s, s.data["ifn"]).get("nat")
+    if neg and cur != side:
+        return
+    _ifcfg_set(s, s.data["ifn"], "nat", None if neg else side)
+    await l3_apply(s)
+
+
+def _nat_update(s, fn):
+    from . import l3
+    nat = {"pools": dict((s.props.get("nat") or {}).get("pools") or {}), "rules": list((s.props.get("nat") or {}).get("rules") or [])}
+    fn(nat)
+    try:
+        l3.normalise_nat(nat)
+    except (l3.AclError, ValueError, KeyError) as e:
+        raise _l3_err(e)
+    s.patch(lambda p: p.__setitem__("nat", nat))
+
+
+async def r_nat_list(s, a, neg, target="interface", overload=False):
+    acl = str(a[0])
+    rule = {"type": "list", "acl": acl, "overload": overload}
+    if target == "interface":
+        rule["interface"] = s.resolve(a[1]); rule["overload"] = True
+    else:
+        rule["pool"] = str(a[1])
+
+    def fn(nat):
+        nat["rules"] = [r for r in nat["rules"] if not (r["type"] == "list" and r["acl"] == acl)]
+        if not neg:
+            if target == "pool" and rule["pool"] not in nat["pools"]:
+                raise CmdError(f"% Pool {rule['pool']} not found")
+            nat["rules"].append(rule)
+    _nat_update(s, fn)
+    await l3_apply(s)
+
+
+def nat_list(target, overload=False):
+    async def h(s, a, neg):
+        return await r_nat_list(s, a, neg, target, overload)
+    return h
+
+
+async def r_nat_static(s, a, neg):
+    local, glob = str(a[0]), str(a[1])
+
+    def fn(nat):
+        nat["rules"] = [r for r in nat["rules"] if not (r["type"] == "static" and r["local"] == local)]
+        if not neg:
+            if any(r.get("global") == glob for r in nat["rules"]):
+                raise CmdError(f"% similar static entry ({glob}) already exists")
+            nat["rules"].append({"type": "static", "local": local, "global": glob})
+    _nat_update(s, fn)
+    await l3_apply(s)
+
+
+async def r_nat_static_port(s, a, neg, proto="tcp", iface=False):
+    local, lport = str(a[0]), int(a[1])
+    rule = {"type": "static-port", "proto": proto, "local": local, "lport": lport, "gport": int(a[3])}
+    if iface:
+        rule["interface"] = s.resolve(a[2])
+    else:
+        rule["global"] = str(a[2])
+
+    def fn(nat):
+        nat["rules"] = [r for r in nat["rules"] if not (r["type"] == "static-port" and r["proto"] == proto and r["gport"] == rule["gport"]
+                                                        and r.get("global") == rule.get("global") and r.get("interface") == rule.get("interface"))]
+        if not neg:
+            nat["rules"].append(rule)
+    _nat_update(s, fn)
+    await l3_apply(s)
+
+
+def nat_static_port(proto, iface=False):
+    async def h(s, a, neg):
+        return await r_nat_static_port(s, a, neg, proto, iface)
+    return h
+
+
+async def r_nat_pool(s, a, neg):
+    name = str(a[0])
+    if neg:
+        def fn(nat):
+            if any(r.get("pool") == name for r in nat["rules"]):
+                raise CmdError(f"% Pool {name} in use, cannot destroy")
+            nat["pools"].pop(name, None)
+        _nat_update(s, fn)
+        return await l3_apply(s)
+    if len(a) < 4:
+        raise CmdError("% Incomplete command.")
+    start, end, m = str(a[1]), str(a[2]), a[3]
+    mask = len2mask(int(m)) if isinstance(m, int) else str(m)
+    _nat_update(s, lambda nat: nat["pools"].__setitem__(name, {"start": start, "end": end, "mask": mask}))
+    await l3_apply(s)
+
+
+async def r_show_acl(s, a, neg):
+    from . import l3
+    cnt = {}
+    try:
+        rc, out, _ = await s.env.io.ns("nft", "-j", "list", "ruleset")
+        if rc == 0:
+            cnt = l3.counters(out)
+    except CmdError:
+        pass
+    await s.w(l3.show_access_lists(s.props.get("acls") or {}, cnt, str(a[0]) if a else None))
+
+
+async def r_clear_acl(s, a, neg):
+    for t in ("nl_acl", "nl_nat"):
+        await s.env.io.ns("nft", "reset", "counters", "table", "ip", t)
+
+
+async def r_show_nat(s, a, neg):
+    from . import l3
+    rc, out, err = await s.env.io.ns("conntrack", "-L", "-n")
+    if rc and "conntrack" in (err or "") and "not found" in (err or ""):
+        raise CmdError("% patchyard: conntrack isn't installed in the app image")
+    await s.w(l3.show_translations(l3.nat_translations(out, s.props)))
+
+
+async def r_show_nat_stats(s, a, neg):
+    cfg = s.props.get("ifcfg") or {}
+    ins = [s.ifname(i) for i, c in cfg.items() if c.get("nat") == "inside"]
+    outs = [s.ifname(i) for i, c in cfg.items() if c.get("nat") == "outside"]
+    rc, out, _ = await s.env.io.ns("conntrack", "-L", "-n")
+    from . import l3
+    rows = l3.nat_translations(out, s.props)
+    rules = (s.props.get("nat") or {}).get("rules") or []
+    L = [f"Total active translations: {len(rows)} ({sum(1 for r in rules if r['type'] != 'list')} static, {len(rows) - sum(1 for r in rules if r['type'] == 'static')} dynamic)",
+         "Outside interfaces:", "  " + (", ".join(outs) or "none"), "Inside interfaces:", "  " + (", ".join(ins) or "none"),
+         "Dynamic mappings:"]
+    for r in rules:
+        if r["type"] == "list":
+            L.append(f"-- Inside Source\n[Id: {rules.index(r) + 1}] access-list {r['acl']} " +
+                     (f"interface {s.ifname(r['interface'])}" if r.get("interface") else f"pool {r['pool']}"))
+    await s.say("\n".join(L))
+
+
+async def r_clear_nat(s, a, neg):
+    await s.env.io.ns("conntrack", "-D", "--src-nat")
+    await s.env.io.ns("conntrack", "-D", "--dst-nat")
+
+
+async def r_helper(s, a, neg):
+    ifn, ip = s.data["ifn"], str(a[0])
+    cur = [h for h in _ifcfg(s, ifn).get("helpers", []) if h != ip]
+    if not neg:
+        cur.append(ip)
+    _ifcfg_set(s, ifn, "helpers", cur[:4])
+    await l3_apply(s)
+
+
+# VRFs
+async def r_vrf_def(s, a, neg, style="definition"):
+    from . import l3
+    name = str(a[0])
+    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,14}", name):
+        raise CmdError("% patchyard: VRF names: letters, digits, _ and -, up to 15 characters")
+    vrfs = {k: dict(v) for k, v in (s.props.get("vrfs") or {}).items()}
+    if neg:
+        vrfs.pop(name, None)
+
+        def fn(p):
+            p["vrfs"] = vrfs
+            p["ifcfg"] = {k: {kk: vv for kk, vv in v.items() if not (kk == "vrf" and vv == name)} for k, v in (p.get("ifcfg") or {}).items()}
+            p["ifcfg"] = {k: v for k, v in p["ifcfg"].items() if v}
+        s.patch(fn)
+        await s.env.io.ns("ip", "link", "del", name)
+        return
+    if name not in vrfs:
+        vrfs[name] = {"style": style, "table": l3.vrf_table(vrfs, name), "import": [], "export": []}
+        s.patch(lambda p: p.__setitem__("vrfs", vrfs))
+        await l3_apply(s)
+    s.mode, s.ctx, s.data = "vrf", [], {"vrf": name}
+
+
+def vrf_def(style):
+    async def h(s, a, neg):
+        return await r_vrf_def(s, a, neg, style)
+    return h
+
+
+def _vrf_patch(s, fn):
+    name = s.data["vrf"]
+    vrfs = {k: dict(v) for k, v in (s.props.get("vrfs") or {}).items()}
+    v = vrfs.setdefault(name, {"style": "definition", "import": [], "export": []})
+    v["import"], v["export"] = list(v.get("import") or []), list(v.get("export") or [])
+    fn(v)
+    s.patch(lambda p: p.__setitem__("vrfs", vrfs))
+
+
+async def r_vrf_rd(s, a, neg):
+    from . import l3
+    rd = str(a[0])
+    if not neg:
+        try:
+            l3.check_rd(rd)
+        except l3.AclError as e:
+            raise _l3_err(e)
+    _vrf_patch(s, lambda v: v.__setitem__("rd", "" if neg else rd))
+    await vrf_sync_bgp(s, s.data["vrf"])
+
+
+async def r_vrf_rt(s, a, neg):
+    from . import l3
+    which, rt = str(a[0]).lower(), str(a[1])
+    if which not in ("import", "export", "both"):
+        raise CmdError("% Invalid input: import, export or both")
+    try:
+        l3.check_rd(rt)
+    except l3.AclError as e:
+        raise _l3_err(e)
+
+    def fn(v):
+        for k in (("import", "export") if which == "both" else (which,)):
+            v[k] = [x for x in v[k] if x != rt] + ([] if neg else [rt])
+    _vrf_patch(s, fn)
+    await vrf_sync_bgp(s, s.data["vrf"])
+
+
+async def r_vrf_af(s, a, neg):
+    s.mode = "vrf-af"
+
+
+async def r_vrf_exit_af(s, a, neg):
+    s.mode = "vrf"
+
+
+async def vrf_sync_bgp(s, name):
+    """Cisco keeps rd/route-targets under the VRF; FRR wants them under 'router bgp N vrf X'."""
+    v = (s.props.get("vrfs") or {}).get(name) or {}
+    _, run = await s.env.io.vtysh("show running-config")
+    m = re.search(rf"^router bgp (\d+) vrf {re.escape(name)}$", run, re.M)
+    if not m or not v.get("rd"):
+        return
+    ctx = [f"router bgp {m.group(1)} vrf {name}", "address-family ipv4 unicast"]
+    lines = [f"rd vpn export {v['rd']}", "label vpn export auto"]
+    if v.get("import"):
+        lines.append("rt vpn import " + " ".join(v["import"]))
+    if v.get("export"):
+        lines.append("rt vpn export " + " ".join(v["export"]))
+    lines += ["export vpn", "import vpn"]
+    await s.frr_do(*lines, ctx=ctx)
+
+
+async def r_vrf_forwarding(s, a, neg):
+    ifn, name = s.data["ifn"], str(a[-1])
+    if not neg and name not in (s.props.get("vrfs") or {}):
+        raise CmdError(f"% VRF {name} not configured.")
+    cur = _ifcfg(s, ifn).get("vrf")
+    if (neg and cur != name) or (not neg and cur == name):
+        return
+    _, out = await s.env.io.vtysh("show running-config")
+    addrs, inside = [], False
+    for ln in out.splitlines():
+        if ln.startswith("interface "):
+            inside = ln.split()[1] == ifn
+        elif inside and ln.strip().startswith("ip address "):
+            addrs.append(ln.strip())
+    if addrs:
+        await s.frr(*[f"no {x}" for x in addrs])
+        await s.say(f"% Interface {s.ifname(ifn)} IPv4 disabled and address(es) removed due to {'disabling' if neg else 'enabling'} VRF {name}")
+    _ifcfg_set(s, ifn, "vrf", None if neg else name)
+    await l3_apply(s)
+
+
+async def r_show_vrf(s, a, neg):
+    vrfs = s.props.get("vrfs") or {}
+    cfg = s.props.get("ifcfg") or {}
+    L = [f"  {'Name':<32}{'Default RD':<21}Interfaces"]
+    for name, v in sorted(vrfs.items()):
+        ifs = [s.short(i) for i, c in sorted(cfg.items()) if c.get("vrf") == name]
+        L.append(f"  {name:<32}{(v.get('rd') or '<not set>'):<21}{ifs[0] if ifs else ''}")
+        L += [f"  {'':<53}{i}" for i in ifs[1:]]
+    rc, out = await s.env.io.vtysh("show vrf")
+    extra = [ln.split()[1] for ln in out.splitlines() if ln.startswith("vrf ") and len(ln.split()) > 1 and ln.split()[1] not in vrfs]
+    L += [f"  {n:<32}{'<not set>':<21}(created outside the IOS CLI)" for n in extra]
+    await s.say("\n".join(L))
+
+
+
+def _with_l3(s, out: list[str]) -> list[str]:
+    """Add the props-backed router config (VRFs, ACLs, NAT, helpers) to the FRR-derived lines."""
+    from . import l3
+    p = getattr(s, "props", None) or {}
+    cfg = {k: v for k, v in (p.get("ifcfg") or {}).items() if v}
+    res, seen, cur = [], set(), None
+    for ln in out:
+        m = re.match(r"^interface (\S+)$", ln)
+        if m:
+            cur = m.group(1)
+            seen.add(cur)
+            res.append(ln)
+            extra = l3.iface_lines(cfg.get(cur) or {})
+            res += extra
+            continue
+        if ln.startswith(" vrf forwarding ") and cur and (cfg.get(cur) or {}).get("vrf"):
+            continue                                     # already added from props
+        if not ln.startswith(" "):
+            cur = None
+        res.append(ln)
+    missing = [i for i in cfg if i not in seen and l3.iface_lines(cfg[i])]
+    if missing:
+        at = next((k for k, l in enumerate(res) if l.startswith(("router ", "ip route", "line ", "end", "mpls ", "vrf ", "bgp ", "segment"))), len(res))
+        blk = []
+        for i in sorted(missing):
+            blk += [f"interface {i}"] + l3.iface_lines(cfg[i]) + ["!"]
+        res[at:at] = blk
+    head = l3.vrf_lines(p.get("vrfs") or {})
+    if head:
+        at = next((k + 1 for k, l in enumerate(res) if l.startswith("hostname ")), 0)
+        res[at:at] = ["!"] + head
+    tail = l3.nat_lines(p.get("nat") or {}, lambda i: i) + ["!"] + l3.acl_lines(p.get("acls") or {})
+    if len(tail) > 1:
+        at = next((k for k, l in enumerate(res) if l.startswith(("line ", "end"))), len(res))
+        res[at:at] = tail + ["!"]
+    return res
+
 
 def ios_config(s, frr_text: str, iface=None) -> str:
     """FRR running/startup config -> IOS-looking config."""
@@ -2150,6 +2625,7 @@ def ios_config(s, frr_text: str, iface=None) -> str:
         if m:
             ln = f"{m.group(1)}bandwidth {int(m.group(2)) * 1000}"
         out.append(ln)
+    out = _with_l3(s, out)
     text = s.tr_out("\n".join(out))
     if iface:
         want = s.ifname(iface)
@@ -2163,7 +2639,7 @@ def ios_config(s, frr_text: str, iface=None) -> str:
                 blk.append(ln)
         return "\n".join(blk + ["end"]) if blk else f"% Interface {want} has no configuration\n"
     ios = s.ios_props()
-    head = ["!", "version FRRouting (shown through the netlab IOS CLI)", "!"]
+    head = ["!", "version FRRouting (shown through the Patchyard IOS CLI)", "!"]
     extras = [x for x in ios.get("extra", [])] + [f"logging host {h}" for h in ios.get("logging_hosts", [])]
     if ios.get("enable_secret"):
         extras.append(f"enable secret 9 $nl${ios['enable_secret'][:22]}")
@@ -2194,14 +2670,14 @@ def switch_config(s) -> str:
     p = s.props
     ios = s.ios_props()
     ovs = p.get("engine") == "ovs"
-    L = ["Building configuration...", "", "Current configuration :", "!", f"version netlab-switch ({'Open vSwitch' if ovs else 'Linux bridge'})", "!",
+    L = ["Building configuration...", "", "Current configuration :", "!", f"version patchyard-switch ({'Open vSwitch' if ovs else 'Linux bridge'})", "!",
          f"hostname {s.host}", "!"]
     L += ios.get("extra", []) + [f"logging host {h}" for h in ios.get("logging_hosts", [])]
     if ios.get("enable_secret"):
         L.append(f"enable secret 9 $nl${ios['enable_secret'][:22]}")
     L.append("!")
     if p.get("stp"):
-        L.append("spanning-tree mode rapid-pvst   ! netlab: RSTP, one instance" if ovs else "spanning-tree mode pvst   ! netlab: 802.1D, one instance")
+        L.append("spanning-tree mode rapid-pvst   ! patchyard: RSTP, one instance" if ovs else "spanning-tree mode pvst   ! patchyard: 802.1D, one instance")
         if int(p.get("stp_priority") or 32768) != 32768:
             L.append(f"spanning-tree vlan 1-4094 priority {p.get('stp_priority')}")
     else:
@@ -2311,11 +2787,15 @@ def router_grammars():
     pv.add("show arp", r_show_arp).add("show ip arp", r_show_arp)
     pv.add("show running-config", r_show_run).add("show running-config interface IF", r_show_run_if).add("show startup-config", r_show_start)
     pv.add("show mpls forwarding-table", passthrough_show("show mpls table")).add("show mpls ldp neighbor", passthrough_show("show mpls ldp neighbor"))
-    pv.add("show ip protocols", passthrough_show("show ip ospf")).add("show ip vrf", passthrough_show("show vrf")).add("show vrf", passthrough_show("show vrf"))
+    pv.add("show ip protocols", passthrough_show("show ip ospf")).add("show ip vrf", r_show_vrf).add("show vrf", r_show_vrf)
+    pv.add("clear access-list counters", r_clear_acl).add("clear ip nat translation *", r_clear_nat)
+    pv.add("show ip nat translations", r_show_nat).add("show ip nat translations verbose", r_show_nat).add("show ip nat statistics", r_show_nat_stats)
     pv.add("write", r_write).add("write memory", r_write).add("copy running-config startup-config", r_copy_rs)
     pv.add("copy WORD WORD", h_copy)
     for g in (ex, pv):
         g.add("show ip ospf neighbor", passthrough_show("show ip ospf neighbor")).add("show ip bgp summary", passthrough_show("show ip bgp summary"))
+        g.add("show access-lists", r_show_acl).add("show access-lists WORD", r_show_acl)
+        g.add("show ip access-lists", r_show_acl).add("show ip access-lists WORD", r_show_acl)
     cf = _global_config(_common_config(Grammar(HELPS)), False)
     cf.add("hostname WORD", r_hostname).add("interface IF", r_interface)
     cf.add("router ospf <1-65535>", r_router_ospf).add("router ospf <1-65535> vrf WORD", r_router_ospf).add("router bgp <1-4294967295>", r_router_bgp)
@@ -2324,10 +2804,18 @@ def router_grammars():
     cf.add("ip route vrf WORD A.B.C.D MASK A.B.C.D", r_ip_route_vrf).add("ip route vrf WORD A.B.C.D MASK IF", r_ip_route_vrf)
     cf.add("ip route vrf WORD A.B.C.D MASK A.B.C.D LINE", r_ip_route_vrf)
     cf.add("mpls ldp router-id IF", r_ldp_rid).add("mpls ldp router-id IF force", r_ldp_rid)
-    cf.add("ip vrf WORD", unsupported("VRFs can't be created from the IOS CLI yet; add them as startup commands (Config tab) and configure BGP/OSPF per VRF here"))
-    cf.add("vrf definition WORD", unsupported("VRFs can't be created from the IOS CLI yet; add them as startup commands (Config tab)"))
-    cf.add("ip nat LINE", unsupported("NAT isn't supported on netlab routers"))
-    cf.add("ip dhcp LINE", unsupported("DHCP server on routers isn't supported; use a netlab server's DHCP service"))
+    cf.add("ip vrf WORD", vrf_def("ip")).add("vrf definition WORD", vrf_def("definition"))
+    cf.add("access-list <1-2699> LINE", r_acl_numbered).add("access-list <1-2699>", r_acl_numbered)
+    cf.add("ip access-list standard WORD", ip_acl("standard")).add("ip access-list extended WORD", ip_acl("extended"))
+    cf.add("ip nat inside source list WORD interface IF overload", nat_list("interface"))
+    cf.add("ip nat inside source list WORD pool WORD", nat_list("pool")).add("ip nat inside source list WORD pool WORD overload", nat_list("pool", True))
+    cf.add("ip nat inside source static A.B.C.D A.B.C.D", r_nat_static)
+    for pr in ("tcp", "udp"):
+        cf.add(f"ip nat inside source static {pr} A.B.C.D <1-65535> A.B.C.D <1-65535>", nat_static_port(pr))
+        cf.add(f"ip nat inside source static {pr} A.B.C.D <1-65535> interface IF <1-65535>", nat_static_port(pr, True))
+    cf.add("ip nat pool WORD A.B.C.D A.B.C.D netmask MASK", r_nat_pool).add("ip nat pool WORD A.B.C.D A.B.C.D prefix-length <1-32>", r_nat_pool)
+    cf.add("ip nat pool WORD", r_nat_pool)
+    cf.add("ip dhcp LINE", unsupported("DHCP server on routers isn't supported; use a Patchyard server's DHCP service"))
     cf.add("vlan VLANS", unsupported("routers have no VLAN database; use subinterfaces (interface Gi0/0/0.10, encapsulation dot1Q 10)"))
     itf = _common_config(Grammar(HELPS))
     itf.add("ip address A.B.C.D MASK", r_ip_address).add("ip address A.B.C.D MASK secondary", r_ip_address).add("ip address", r_ip_address)
@@ -2335,11 +2823,10 @@ def router_grammars():
     itf.add("ip ospf <1-65535> area AREA", r_ip_ospf_area).add("bandwidth <1-100000000>", r_bandwidth)
     itf.add("encapsulation dot1q <1-4094>", r_encap).add("encapsulation dot1q <1-4094> native", r_encap)
     itf.add("mpls ip", r_mpls_ip).add("speed LINE", h_speed).add("duplex LINE", h_speed)
-    itf.add("ip access-group LINE", unsupported("interface ACLs (packet filtering) aren't supported yet"))
-    itf.add("ip nat LINE", unsupported("NAT isn't supported on netlab routers"))
-    itf.add("ip helper-address A.B.C.D", unsupported("DHCP relay isn't supported yet"))
-    itf.add("vrf forwarding WORD", unsupported("put interfaces in VRFs with startup commands for now (ip link set <port> master <vrf>)"))
-    itf.add("ip vrf forwarding WORD", unsupported("put interfaces in VRFs with startup commands for now (ip link set <port> master <vrf>)"))
+    itf.add("ip access-group WORD WORD", r_access_group)
+    itf.add("ip nat WORD", r_ip_nat_if)
+    itf.add("ip helper-address A.B.C.D", r_helper)
+    itf.add("vrf forwarding WORD", r_vrf_forwarding).add("ip vrf forwarding WORD", r_vrf_forwarding)
     itf.add("channel-group LINE", unsupported("EtherChannel isn't supported yet"))
     ospf = _common_config(Grammar(HELPS))
     ospf.add("router-id A.B.C.D", r_ospf_rid).add("network A.B.C.D WILD area AREA", r_ospf_network)
@@ -2352,7 +2839,16 @@ def router_grammars():
     af = _common_config(Grammar(HELPS))
     af.add("network A.B.C.D", r_bgp_network).add("network A.B.C.D mask MASK", r_bgp_network).add("exit-address-family", r_exit_af)
     af.add("redistribute LINE", r_redistribute)
-    return {"exec": ex, "priv": pv, "config": cf, "if": itf, "subif": itf, "ospf": ospf, "bgp": bgp, "bgp-af": af, "line": _line_mode(Grammar(HELPS))}
+    acl = _common_config(Grammar(HELPS))
+    acl.add("permit LINE", ace("permit")).add("deny LINE", ace("deny")).add("remark LINE", ace("remark"))
+    acl.add("<1-2147483647> LINE", ace(None)).add("<1-2147483647>", ace(None))
+    vrf = _common_config(Grammar(HELPS))
+    vrf.add("rd WORD", r_vrf_rd).add("route-target WORD WORD", r_vrf_rt).add("description LINE", h_terminal_noop)
+    vrf.add("address-family ipv4", r_vrf_af).add("address-family ipv4 unicast", r_vrf_af)
+    vaf = _common_config(Grammar(HELPS))
+    vaf.add("route-target WORD WORD", r_vrf_rt).add("exit-address-family", r_vrf_exit_af)
+    return {"exec": ex, "priv": pv, "config": cf, "if": itf, "subif": itf, "ospf": ospf, "bgp": bgp, "bgp-af": af, "line": _line_mode(Grammar(HELPS)),
+            "acl-std": acl, "acl-ext": acl, "vrf": vrf, "vrf-af": vaf}
 
 
 def switch_grammars():
@@ -2372,8 +2868,8 @@ def switch_grammars():
     cf.add("vlan VLANS", sw_vlan).add("ip default-gateway A.B.C.D", sw_default_gw).add("ip default-gateway", sw_default_gw)
     cf.add("spanning-tree vlan VLANS priority <0-61440>", sw_stp_prio).add("spanning-tree mode WORD", sw_stp_mode)
     cf.add("spanning-tree vlan VLANS", sw_stp_off)
-    cf.add("ip route LINE", unsupported("netlab switches are layer 2; use 'ip default-gateway' for the management SVI"))
-    cf.add("router LINE", unsupported("netlab switches are layer 2; routing runs on a router"))
+    cf.add("ip route LINE", unsupported("Patchyard switches are layer 2; use 'ip default-gateway' for the management SVI"))
+    cf.add("router LINE", unsupported("Patchyard switches are layer 2; routing runs on a router"))
     itf = _common_config(Grammar(HELPS))
     itf.add("switchport mode access", sw_mode_h("access")).add("switchport mode trunk", sw_mode_h("trunk"))
     itf.add("switchport access vlan <1-4094>", sw_access_vlan).add("switchport trunk native vlan <1-4094>", sw_trunk_native)
@@ -2401,7 +2897,7 @@ SW_GRAMMARS = switch_grammars()
 
 # --------------------------------------------------------------------------- batch (Config tab forms)
 
-_ERR = re.compile(r"^\s*% (Invalid|Incomplete|Ambiguous|Bad|Unknown|Please|Inconsistent|Configuring|Interface not|Physical|netlab: (?!saved|portfast|one spanning|speed|rapid|mst|a netlab switch has))", re.M)
+_ERR = re.compile(r"^\s*% (Invalid|Incomplete|Ambiguous|Bad|Unknown|Please|Inconsistent|Configuring|Interface not|Physical|patchyard: (?!saved|portfast|one spanning|speed|rapid|mst|a Patchyard switch has))", re.M)
 
 
 async def run_batch(env: Env, commands: list[str]) -> dict:
@@ -2440,7 +2936,7 @@ async def serve(ws, lab: str, node: str):
         env = Env(lab, node)
         n = next((x for x in env.load()["nodes"] if x["id"] == node), None)
         if not n or n["type"] not in ("router", "switch") or n.get("raw"):
-            await ws.send_text("\r\nThe IOS CLI is available on netlab routers and switches.\r\n")
+            await ws.send_text("\r\nThe IOS CLI is available on Patchyard routers and switches.\r\n")
             await ws.close()
             return
     except Exception as e:

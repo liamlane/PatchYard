@@ -5,7 +5,7 @@ from app import labs, impair, monitor, metrics
 def test_templates_create_and_generate(client):
     ids = [t["id"] for t in client.get("/api/templates").json()]
     assert ids == ["ospf-triangle", "ospf-multiarea", "bgp-multi-as", "serial-wan", "router-on-a-stick", "campus-stp",
-                   "campus-rstp-lacp", "small-office", "firewall-edge", "isp-mpls"]
+                   "campus-rstp-lacp", "nat-acl-edge", "dhcp-relay", "small-office", "firewall-edge", "isp-mpls"]
     for tid in ids:
         r = client.post(f"/api/templates/{tid}", json={"name": f"t-{tid}"})
         assert r.status_code == 200, r.text
@@ -86,3 +86,14 @@ def test_frr_parsers():
     assert monitor.norm_ospf({"neighbors": {"1.1.1.1": [{"nbrState": "Full/-", "ifaceName": "eth1:x"}]}})[0]["full"]
     bg = monitor.norm_bgp({"default": {"ipv4Vpn": {"as": 1, "peers": {"a": {"state": "Established"}}}}})
     assert bg[0]["up"] and bg[0]["afi"] == "ipv4Vpn"
+
+
+def test_env_names_and_system(client, monkeypatch):
+    from app.env import env
+    monkeypatch.setenv("NETLAB_FOO", "old"); assert env("FOO") == "old"
+    monkeypatch.setenv("PATCHYARD_FOO", "new"); assert env("FOO") == "new"
+    assert client.get("/api/version").json()["name"] == "Patchyard"
+    caps = client.get("/api/system").json()
+    assert {"bridge", "mpls", "ovs", "nftables"} <= set(caps["features"])
+    t = {x["id"]: x for x in client.get("/api/templates").json()}
+    assert t["isp-mpls"]["needs"] == ["mpls", "vrf"] and t["ospf-triangle"]["needs"] == []
