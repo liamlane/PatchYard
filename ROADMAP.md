@@ -1,10 +1,10 @@
 # Roadmap
 
-## Next (0.13.0)
-- **Lab challenges**: Packet Tracer-style activities with instructions and a Check button (reachability, protocol and config assertions, percentage score), shareable as files.
-- **External notifications**: email (SMTP), phone push via ntfy, Teams/Slack webhooks, per-rule routing and quiet hours.
-- Firewall: site-to-site WireGuard/IPsec VPN, logging of dropped traffic to a syslog server.
-- arm64 image (Raspberry Pi 5, Ampere, Apple Silicon VMs).
+## Next (0.14.0)
+- **Two-factor sign-in** (TOTP authenticator apps), required for admins on public servers.
+- **More notification channels**: phone push via ntfy, Teams/Slack webhooks, per-rule routing and quiet hours.
+- **More built-in challenges** (ACLs, VLANs, BGP, NAT) and a challenge leaderboard per server.
+- Shared (team) labs and read-only sharing for instructors.
 - Verify the 1-hour history check on a long-running install.
 
 ## Planned
@@ -16,14 +16,16 @@
 - VyOS as a device type (needs an image built from the VyOS ISO; no official container image).
 - Download Simulation captures as pcap for Wireshark.
 - Scheduled snapshots; include `/opt/netlab` in the Restic backup.
-- Multi-user follow-ups: per-user disk quota, password reset by email, two-factor login, audit log, shared (team) labs, read-only lab sharing for instructors.
-- Self-test script: deploy a template, run checks, report pass/fail (for verifying each release on the VM).
+- Firewall: site-to-site WireGuard/IPsec VPN, logging of dropped traffic to a syslog server.
+- arm64 image (Raspberry Pi 5, Ampere, Apple Silicon VMs).
 - Move the four original templates onto hardware models (the six 0.11 templates already use them).
 - IOS `copy … ftp://` and an SMTP/email service on servers (Packet Tracer's EMAIL page).
 - SR Linux / Arista cEOS device types; VM-based images where nested virtualisation is available.
 - Per-hop Simulation stepping (hold packets at each device like Packet Tracer).
 
 ## Done
+- 0.13.0: email (SMTP) with test and status, forgot-password, emailed invites and alert digests; lab challenges with a Check button, built-ins and publishing; audit log; per-user disk allowance; self-test; performance and stability pass.
+- 0.12.1: account requests with admin approval, names and emails on accounts, built-in help & how-to guide.
 - Phase 1 and Phase 2 containerlab labs verified on a live host (incl. timed failover test).
 - Web app: canvas, device windows, FRR CLI, PC desktop, server services, Simulation mode.
 - VLANs/trunking, router-on-a-stick, STP, management SVI.

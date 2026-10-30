@@ -17,7 +17,7 @@ from . import settings
 FILE = settings.FILE.parent / "users.json"
 NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{2,23}$")
 RESERVED = {"admin-api", "api", "root", "system", "patchyard", "netlab", "invite", "login", "logout"}
-QUOTA_KEYS = ("max_labs", "max_running_labs", "max_devices", "device_memory_mb", "device_cpus")
+QUOTA_KEYS = ("max_labs", "max_running_labs", "max_devices", "device_memory_mb", "device_cpus", "max_disk_mb")
 _LOCK = threading.RLock()
 
 
@@ -26,17 +26,31 @@ class UserError(ValueError):
 
 
 def _empty():
-    return {"users": {}, "invites": {}, "requests": {}}
+    return {"users": {}, "invites": {}, "requests": {}, "resets": {}}
+
+
+_MEMO: dict = {"key": None, "d": None}
 
 
 def _load() -> dict:
+    """users.json, parsed once per change (it's read on every authenticated request)."""
     try:
-        d = json.loads(FILE.read_text())
+        st = FILE.stat()
+        key = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        key = None
+    if key is not None and _MEMO["key"] == key:
+        return json.loads(_MEMO["d"])                       # a private copy, callers may modify it
+    try:
+        raw = FILE.read_text()
+        d = json.loads(raw)
+        _MEMO["key"], _MEMO["d"] = key, raw
     except (OSError, ValueError):
         d = _empty()
     d.setdefault("users", {})
     d.setdefault("invites", {})
     d.setdefault("requests", {})
+    d.setdefault("resets", {})
     if not d["users"]:
         _migrate(d)
     return d
@@ -125,7 +139,8 @@ def any_users() -> bool:
 
 def public(name: str, u: dict) -> dict:
     return {"name": name, "full_name": u.get("full_name", ""), "email": u.get("email", ""), "role": u.get("role", "user"), "created": u.get("created"), "last_login": u.get("last_login"),
-            "disabled": bool(u.get("disabled")), "internet": bool(u.get("internet")), "quota": u.get("quota") or {}}
+            "disabled": bool(u.get("disabled")), "internet": bool(u.get("internet")), "quota": u.get("quota") or {},
+            "alert_email": bool(u.get("alert_email"))}
 
 
 def create(name: str, password: str | None, role: str = "user", internet: bool = False,
@@ -198,6 +213,8 @@ def update(name: str, **kw) -> dict:
             u["gen"] = int(u.get("gen", 1)) + 1
         if "internet" in kw:
             u["internet"] = bool(kw["internet"])
+        if "alert_email" in kw:
+            u["alert_email"] = bool(kw["alert_email"])
         if "full_name" in kw:
             u["full_name"] = check_text(kw["full_name"], "name", 2, 80, required=False)
         if "email" in kw:
@@ -245,7 +262,7 @@ def session_gen(name: str) -> int | None:
 
 # ------------------------------------------------------------------ quotas
 
-DEFAULT_QUOTA = {"max_labs": 5, "max_running_labs": 1, "max_devices": 20, "device_memory_mb": 512, "device_cpus": 1.0}
+DEFAULT_QUOTA = {"max_labs": 5, "max_running_labs": 1, "max_devices": 20, "device_memory_mb": 512, "device_cpus": 1.0, "max_disk_mb": 2048}
 
 
 def quota(name: str) -> dict:
@@ -366,6 +383,10 @@ def pending_count() -> int:
         return sum(1 for r in _load()["requests"].values() if r["state"] == "pending")
 
 
+def get_request(rid: str) -> dict | None:
+    return _load()["requests"].get(rid)
+
+
 def approve_request(rid: str, by: str, internet: bool = False) -> dict:
     with _LOCK:
         d = _load()
@@ -389,11 +410,13 @@ def decline_request(rid: str, by: str):
         r = d["requests"].get(rid)
         if not r:
             raise UserError("no such request")
-        if r["state"] == "pending":
+        was = r["state"]
+        if was == "pending":
             r.update(state="declined", decided=time.time(), by=by)
         else:
             del d["requests"][rid]             # declining again = forget it
         _save(d)
+        return {"was": was, **{k: r.get(k) for k in ("username", "full_name", "email")}}
 
 
 def request_status(username: str, password: str) -> str | None:
@@ -406,3 +429,50 @@ def request_status(username: str, password: str) -> str | None:
         if r["username"] == name and r.get("hash") and chk(password or "", r["hash"]):
             return r["state"]
     return None
+
+
+# ------------------------------------------------------------------ password reset by email
+
+RESET_TTL = 3600
+
+
+def find_user(login: str) -> str | None:
+    """Username for a username or an email address (case-insensitive), or None."""
+    login = (login or "").strip().lower()
+    if not login:
+        return None
+    us = all_users()
+    if login in us:
+        return login
+    return next((n for n, u in us.items() if (u.get("email") or "").lower() == login), None)
+
+
+def create_reset(name: str) -> str:
+    """A one-hour, single-use reset token for this user (older ones stop working)."""
+    token = secrets.token_urlsafe(32)
+    with _LOCK:
+        d = _load()
+        if name not in d["users"]:
+            raise UserError(f"no user {name}")
+        now = time.time()
+        d["resets"] = {h: r for h, r in d["resets"].items() if r["user"] != name and r["expires"] > now}
+        d["resets"][_th(token)] = {"user": name, "created": now, "expires": now + RESET_TTL}
+        _save(d)
+    return token
+
+
+def check_reset(token: str) -> str:
+    r = _load()["resets"].get(_th(token or ""))
+    if not r or r["expires"] < time.time() or not get(r["user"]) or get(r["user"]).get("disabled"):
+        raise UserError("this reset link is invalid or has expired: ask for a new one")
+    return r["user"]
+
+
+def use_reset(token: str, password: str) -> str:
+    with _LOCK:
+        name = check_reset(token)
+        set_password(name, password)          # also signs out every other session
+        d = _load()
+        d["resets"].pop(_th(token), None)
+        _save(d)
+        return name

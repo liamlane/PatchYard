@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ReactFlow, ReactFlowProvider, Background, Controls, MiniMap, applyEdgeChanges, useReactFlow } from "@xyflow/react";
 import { api } from "./api.js";
 import { DeviceNode, CableEdge, NoteNode, AreaNode } from "./canvas.jsx";
@@ -9,10 +9,12 @@ import Dashboard from "./Dashboard.jsx";
 import LinkPanel from "./LinkPanel.jsx";
 import LabManager, { MiniTopo } from "./LabManager.jsx";
 import Palette from "./Palette.jsx";
-import Settings from "./Settings.jsx";
-import { NotificationsPanel, TrafficPanel, Login, InvitePage } from "./Notifications.jsx";
-import Admin from "./Admin.jsx";
-import Guide from "./Guide.jsx";
+import { NotificationsPanel, TrafficPanel, Login, InvitePage, ResetPage } from "./Notifications.jsx";
+// Modals load on first use: smaller first page load
+const Settings = lazy(() => import("./Settings.jsx"));
+const Admin = lazy(() => import("./Admin.jsx"));
+const Guide = lazy(() => import("./Guide.jsx"));
+import { ChallengePanel } from "./Challenge.jsx";
 import { createPortal } from "react-dom";
 import { setMe } from "./me.js";
 import { PortMenu } from "./Hardware.jsx";
@@ -66,6 +68,7 @@ function Workspace() {
   const [admin, setAdmin] = useState(null);          // null | admin tab to open
   const [acct, setAcct] = useState(false);
   const acctBtn = useRef(null);
+  const closeAcct = useCallback(() => setAcct(false), []);
   const lastReq = useRef(-1);
   const [alertSum, setAlertSum] = useState(null);
   const lastEid = useRef(-1);
@@ -114,7 +117,7 @@ function Workspace() {
   }, []);
   const refreshLabs = useCallback(() => api.labs().then(setLabs).catch((e) => notify(e.message, null, "bad")), [notify]);
   useEffect(() => {
-    api.authState().then((a) => { setMe(a.user); setAuth({ checked: true, need: a.enabled && !a.logged_in, user: a.user, multi: a.multi_user, requests: a.requests }); })
+    api.authState().then((a) => { setMe(a.user); setAuth({ checked: true, need: a.enabled && !a.logged_in, user: a.user, multi: a.multi_user, requests: a.requests, forgot: a.forgot }); })
       .catch(() => setAuth({ checked: true, need: false, user: null }));
     const h = () => setAuth((x) => ({ ...x, checked: true, need: true }));
     window.addEventListener("netlab-auth", h);
@@ -152,7 +155,7 @@ function Workspace() {
         lastReq.current = r.requests;
       }
     }).catch(() => {});
-    load(); const t = setInterval(load, 5000);
+    load(); const t = setInterval(() => { if (!document.hidden) load(); }, 5000);
     return () => { alive = false; clearInterval(t); };
   }, [auth.checked, auth.need, appSettings, notify]); // eslint-disable-line
 
@@ -192,7 +195,7 @@ function Workspace() {
     if (!lab) return;
     let alive = true;
     const load = () => api.status(lab.name).then((s) => { if (alive) { setStatus(s); setCapturing(s.capturing); pullServerProps(s); } }).catch(() => {});
-    load(); const t = setInterval(load, 4000);
+    load(); const t = setInterval(() => { if (!document.hidden) load(); }, 4000);
     return () => { alive = false; clearInterval(t); };
   }, [lab?.name]);
   // device props changed on the server (IOS CLI, power) -> merge them into the open lab
@@ -254,7 +257,7 @@ function Workspace() {
         setLinkHist((h) => { const n = { ...h }; for (const [id, r] of Object.entries(d.links || {})) n[id] = [...(n[id] || []), r.total_bps].slice(-60); return n; });
       }
     }).catch(() => {});
-    load(); const t = setInterval(load, 5000);
+    load(); const t = setInterval(() => { if (!document.hidden) load(); }, 5000);
     return () => { alive = false; clearInterval(t); };
   }, [lab?.name, deployed]);
 
@@ -281,7 +284,7 @@ function Workspace() {
         if (r.events.length) { lastId.current = r.events[r.events.length - 1].id; setEvents((e) => [...e, ...r.events].slice(-5000)); }
       } catch { /* next poll */ }
     };
-    load(); const t = setInterval(load, 1000);
+    load(); const t = setInterval(() => { if (!document.hidden) load(); }, 1000);
     return () => { alive = false; clearInterval(t); };
   }, [sim, lab?.name]);
   useEffect(() => { if (!follow || !visible.length) return; setCursor(visible.length - 1); animate(visible[visible.length - 1]); }, [visible.length, follow]); // eslint-disable-line
@@ -582,6 +585,8 @@ function Workspace() {
     { label: "Save running configs", icon: "save", group: "Lab", kbd: "Ctrl+S", run: doSaveConfigs, disabled: !deployed },
     { label: "Take snapshot", icon: "camera", group: "Lab", run: quickSnapshot, disabled: !lab },
     { label: "Lab manager: templates", icon: "layers", group: "Lab", run: () => setMgr("templates") },
+    { label: "Lab manager: challenges", icon: "flag", group: "Lab", run: () => setMgr("challenges") },
+    { label: "Challenge panel", icon: "flag", group: "Lab", run: () => setSide("challenge"), disabled: !lab },
     { label: "Lab manager: snapshots & diff", icon: "diff", group: "Lab", run: () => setMgr("snapshots"), disabled: !lab },
     { label: "Clone / export / import", icon: "copy", group: "Lab", run: () => setMgr("share") },
     { label: "New blank lab", icon: "plus", group: "Lab", run: newLab },
@@ -637,7 +642,9 @@ function Workspace() {
 
   const invite = location.pathname.match(/^\/invite\/([\w-]+)$/);
   if (invite) return <InvitePage token={invite[1]} />;
-  if (auth.need) return <><Login canRequest={auth.requests} onDone={() => { history.replaceState(null, "", "/"); api.authState().then((a) => { setMe(a.user); setAuth({ checked: true, need: false, user: a.user, multi: a.multi_user, requests: a.requests }); }); }} /><Toasts items={toasts} onClose={(id) => setToasts((x) => x.filter((t) => t.id !== id))} /></>;
+  const reset = location.pathname.match(/^\/reset\/([\w-]+)$/);
+  if (reset) return <ResetPage token={reset[1]} />;
+  if (auth.need) return <><Login canRequest={auth.requests} canForgot={auth.forgot} onDone={() => { history.replaceState(null, "", "/"); api.authState().then((a) => { setMe(a.user); setAuth({ checked: true, need: false, user: a.user, multi: a.multi_user, requests: a.requests, forgot: a.forgot }); }); }} /><Toasts items={toasts} onClose={(id) => setToasts((x) => x.filter((t) => t.id !== id))} /></>;
   const me = auth.user;
   return (
     <div className={`app ${sideOpen ? `app-side app-${sideOpen}` : ""}`}>
@@ -672,6 +679,8 @@ function Workspace() {
           <button className={!sim ? "on" : ""} onClick={() => sim && toggleSim()}>Realtime</button>
           <button className={sim ? "on" : ""} onClick={() => !sim && toggleSim()}>Simulation</button>
         </div>}
+        {lab && <TB icon="flag" label={lab.challenge ? `Challenge: ${lab.challenge.title}` : "Challenge (add instructions and checks)"} on={side === "challenge" && !sim}
+          onClick={() => { if (sim) toggleSim(); setSide(side === "challenge" ? null : "challenge"); }} />}
         {lab && <TB icon="dash" label="Dashboard" kbd="M" on={side === "dash" && !sim} onClick={() => { if (sim) toggleSim(); setSide(side === "dash" && !sim ? null : "dash"); }} />}
         {lab && <TB icon="flow" label="Traffic generator" on={side === "traffic" && !sim} disabled={!deployed} onClick={() => { if (sim) toggleSim(); setSide(side === "traffic" ? null : "traffic"); }} />}
         <button className={`tb bell ${side === "alerts" ? "on" : ""} ${alertSum?.by_severity?.critical ? "crit" : alertSum?.unacked ? "warn" : ""}`} title="Notifications"
@@ -685,7 +694,7 @@ function Workspace() {
             <button ref={acctBtn} className={`tb acct-btn ${acct ? "on" : ""}`} onClick={() => setAcct(!acct)} aria-haspopup="menu" aria-expanded={acct}
               title={alertSum?.requests ? `${alertSum.requests} account request(s) waiting` : "Your account"}>
               <span className="avatar">{me.name.slice(0, 1).toUpperCase()}{alertSum?.requests > 0 && <span className="dot" />}</span><span className="tb-text">{me.name}</span></button>
-            {acct && <AccountMenu anchor={acctBtn} onClose={() => setAcct(false)}>
+            {acct && <AccountMenu anchor={acctBtn} onClose={closeAcct}>
               <div className="hint">Signed in as <b>{me.full_name || me.name}</b>{me.full_name ? ` (${me.name})` : ""}{me.role === "admin" ? " · admin" : ""}</div>
               {me.role === "admin" && <button role="menuitem" onClick={() => { setAcct(false); setAdmin("users"); }}><Icon name="grid" size={15} /> Admin: users, invites, labs</button>}
               {me.role === "admin" && alertSum?.requests > 0 && <button role="menuitem" onClick={() => { setAcct(false); setAdmin("requests"); }}><Icon name="flag" size={15} /> Account requests <span className="badge inline">{alertSum.requests}</span></button>}
@@ -787,6 +796,10 @@ function Workspace() {
         <NotificationsPanel onClose={() => setSide(null)} notify={notify} onSettings={() => setSettingsTab("alerts")} refreshKey={alertSum?.last_event}
           onGoto={async (labName, node) => { if (labName !== lab?.name) await openLab(labName); setTimeout(() => { focusNode(node); }, 400); }} />
       )}
+      {!sim && side === "challenge" && lab && (
+        <ChallengePanel key={lab.name} lab={lab} deployed={deployed} me={me} notify={notify} onClose={() => setSide(null)}
+          onChange={(c) => quiet((l) => { const n = { ...l }; if (c) n.challenge = c; else delete n.challenge; return n; })} />
+      )}
       {!sim && side === "traffic" && lab && (
         <TrafficPanel key={trafficPreset?.k || "t"} lab={lab} states={states} preset={trafficPreset} notify={notify} onClose={() => setSide(null)} />
       )}
@@ -813,12 +826,15 @@ function Workspace() {
       {menu && <Menu {...menu} onClose={() => setMenu(null)} />}
       {palette != null && <Palette initial={palette} commands={commands} devices={(lab?.nodes || []).map((n) => ({ ...n, state: states[n.id] }))}
         onPickDevice={(id) => { focusNode(id); openWin(id); }} onClose={() => setPalette(null)} />}
-      {mgr && <LabManager lab={lab} deployed={deployed} initial={mgr} notify={notify} onOpenLab={openLab} onClose={() => setMgr(null)} refreshLabs={refreshLabs}
+      {mgr && <LabManager lab={lab} deployed={deployed} initial={mgr} notify={notify} onOpenLab={openLab}
+        onStartChallenge={async (n) => { await openLab(n); setSide("challenge"); refreshLabs(); }} onClose={() => setMgr(null)} refreshLabs={refreshLabs}
         onReload={async () => setLab(await api.get(lab.name))} onRedeploy={doDeploy} />}
+      <Suspense fallback={null}>
       {help && <Guide section={help} onSection={setHelp} onClose={() => setHelp(null)} keys={KEYS} me={me} accounts={!!me && auth.multi !== undefined} />}
       {admin && <Admin tab={admin} onTab={setAdmin} onClose={() => { setAdmin(null); refreshLabs(); }} notify={notify} me={me} onOpenLab={openLab} />}
       {settingsTab && <Settings initial={settingsTab} me={me} onClose={() => setSettingsTab(null)} notify={notify} labs={labs} lab={lab} onSaved={setAppSettings}
         appearance={{ theme, setTheme, overlay, setOverlay, showIf, setShowIf, snap, setSnap }} />}
+      </Suspense>
       {busy && <div className="busy" role="status"><div className="spinner" /><p>{busy}</p></div>}
     </div>
   );

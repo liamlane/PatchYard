@@ -1,4 +1,4 @@
-"""netlab API + static web UI."""
+"""Patchyard API + static web UI."""
 import asyncio, logging, re, secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -7,6 +7,7 @@ from fastapi import FastAPI, HTTPException, WebSocket, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from . import labs, devices, metrics, monitor, impair, labmgmt, templates, settings, alerts, live, traffic, auth, hardware, reach, cfgstate, l3, system, users, sandbox, proxy
+from . import mailer, audit, challenges, notify
 from .version import VERSION, COMMIT
 from .capture import capture_for
 from .console import console
@@ -15,6 +16,8 @@ from .util import run, check_name, container_states, cname
 logging.basicConfig(level=logging.INFO)
 app = FastAPI(title="Patchyard", version=VERSION)
 app.add_middleware(auth.AuthMiddleware)
+from fastapi.middleware.gzip import GZipMiddleware   # noqa: E402
+app.add_middleware(GZipMiddleware, minimum_size=1024)   # lab JSON, the UI bundle (Caddy also compresses when it's in front)
 LOCKS: dict[str, asyncio.Lock] = {}
 
 
@@ -46,6 +49,8 @@ async def lifespan(_app):
         alerts.restore_active()
         tasks = [asyncio.create_task(metrics.collector()), asyncio.create_task(alerts.health_loop())]
         tasks.append(asyncio.create_task(_restore_l3()))
+        tasks.append(asyncio.create_task(notify.alert_digest_loop()))
+        tasks.append(asyncio.create_task(notify.disk_watch_loop()))
         await proxy.start()
         fw = await sandbox.refresh_firewall()
         if fw:
@@ -120,6 +125,30 @@ async def quota_running(lab: dict):
         raise HTTPException(403, f"you can run {q['max_running_labs']} lab(s) at a time: destroy {', '.join(sorted(busy))} first")
 
 
+async def read_body(request: Request, limit: int) -> bytes:
+    """The request body, refusing anything over limit without reading it all into memory first."""
+    cl = request.headers.get("content-length")
+    if cl and cl.isdigit() and int(cl) > limit:
+        raise HTTPException(413, f"too large (limit {limit // (1024 * 1024)} MB)")
+    buf = bytearray()
+    async for chunk in request.stream():
+        buf += chunk
+        if len(buf) > limit:
+            raise HTTPException(413, f"too large (limit {limit // (1024 * 1024)} MB)")
+    return bytes(buf)
+
+
+def quota_disk(owner: str | None = None, adding: int = 0):
+    """Refuse new data when the owner's labs already use their disk allowance."""
+    owner = owner or auth.current()["name"]
+    q = users.quota(owner)
+    if not q.get("max_disk_mb"):
+        return
+    used = notify.disk_used(owner)
+    if used + adding > q["max_disk_mb"] * 1024 * 1024:
+        raise HTTPException(403, f"your labs use {used / 1048576:.0f} MB of your {q['max_disk_mb']} MB: delete snapshots, files or labs first")
+
+
 def own_new(lab_name: str, owner: str | None = None):
     """Stamp the owner on a lab that was just created."""
     d = labs.load(lab_name)
@@ -136,7 +165,9 @@ async def api_list():
 @app.post("/api/labs")
 async def api_create(body: dict):
     quota_new_lab()
+    quota_disk()
     labs.create(check_name(body["name"]))
+    audit.record("lab.create", body["name"])
     return own_new(body["name"])
 
 
@@ -197,6 +228,7 @@ async def api_delete(lab: str):
     if states:
         raise HTTPException(409, "destroy the lab before deleting it")
     labs.delete(lab)
+    audit.record("lab.delete", lab)
     return {"ok": True}
 
 
@@ -216,6 +248,8 @@ async def api_deploy(lab: str):
         d = labs.load(lab)
         quota_devices(d)
         await quota_running(d)
+        quota_disk(d.get("owner") or auth.first_admin())
+        audit.record("lab.deploy", lab)
         d = labs.ensure_subnet(d)
         if sandbox.active(d):
             bad = [b for b in labs.bridges(d) if not b.startswith(labs.bridge_prefix(d))]
@@ -254,6 +288,7 @@ async def api_destroy(lab: str):
             labs.generate(d)
         rc, out, err = await run("containerlab", "destroy", "-t", str(p), "--cleanup",
                                  cwd=str(labs.workdir(d)), timeout=600)
+        audit.record("lab.destroy", lab)
         l3.stop_lab(lab)
         if sandbox.enabled():
             await run("docker", "network", "rm", f"py-{lab}")
@@ -526,10 +561,16 @@ async def api_templates():
 @app.post("/api/templates/{tid}")
 async def api_template_create(tid: str, body: dict):
     quota_new_lab()
+    quota_disk()
     me = auth.current()["name"]
     d = await asyncio.to_thread(templates.create, tid, check_name(body.get("name", "")))
     d = own_new(d["name"], me)
-    quota_devices(d)
+    try:
+        quota_devices(d)
+    except HTTPException:
+        labs.delete(d["name"])           # don't leave a lab behind that the user can't deploy
+        raise
+    audit.record("lab.create", d["name"], f"template {tid}")
     return d
 
 
@@ -542,6 +583,7 @@ async def api_snaps(lab: str):
 @app.post("/api/labs/{lab}/snapshots")
 async def api_snap_take(lab: str, body: dict):
     d = labs.load(lab)
+    quota_disk(d.get("owner") or auth.first_admin())
     saved = await devices.save_configs(d)
     snap = labmgmt.snapshot(d, body.get("label", ""))
     return {"snapshot": snap, "saved_configs": saved}
@@ -576,6 +618,7 @@ async def api_snap_delete(lab: str, sid: str):
 @app.post("/api/labs/{lab}/clone")
 async def api_clone(lab: str, body: dict):
     quota_new_lab()
+    quota_disk()
     d = labs.load(lab)
     await devices.save_configs(d)
     c = labmgmt.clone(d, check_name(body.get("name", "")))
@@ -585,6 +628,12 @@ async def api_clone(lab: str, body: dict):
         nd.pop("trusted", None)
     labs.save(nd)
     c["lab"] = own_new(nd["name"])
+    try:
+        quota_devices(c["lab"])
+    except HTTPException:
+        labs.delete(nd["name"])
+        raise
+    audit.record("lab.create", nd["name"], f"clone of {lab}")
     return c
 
 
@@ -600,7 +649,9 @@ async def api_export(lab: str):
 @app.post("/api/labs/import-zip")
 async def api_import_zip(name: str, request: Request):
     quota_new_lab()
-    d = labmgmt.import_zip(check_name(name), await request.body())
+    data = await read_body(request, labmgmt.MAX_ZIP)
+    quota_disk(adding=len(data))
+    d = labmgmt.import_zip(check_name(name), data)
     if not auth.is_admin():
         try:
             for k in ("trusted", "workdir", "imported_from"):
@@ -612,6 +663,7 @@ async def api_import_zip(name: str, request: Request):
             raise
     d.pop("sandbox_subnet", None)
     labs.save(d)
+    audit.record("lab.create", d["name"], "imported zip")
     return own_new(d["name"])
 
 
@@ -650,7 +702,12 @@ async def api_settings():
 async def api_settings_put(body: dict):
     body.pop("_meta", None)
     was = settings.get("sandbox.enabled")
+    before = settings.load()
     r = settings.save(body)
+    after = settings.load()
+    changed = sorted(k for k in after if before.get(k) != after.get(k))
+    if changed:
+        audit.record("settings.change", "", ", ".join(changed))
     if settings.get("sandbox.enabled") != was:
         await (proxy.start() if settings.get("sandbox.enabled") else proxy.stop())
         await sandbox.refresh_firewall()
@@ -662,10 +719,11 @@ async def api_auth_state(request: Request):
     who = auth.session_user(request.cookies.get(auth.COOKIE)) if auth.enabled() else auth.current()
     if who:
         u = users.get(who["name"]) or {}
-        who = {**who, "full_name": u.get("full_name", ""), "email": u.get("email", "")}
+        who = {**who, "full_name": u.get("full_name", ""), "email": u.get("email", ""), "alert_email": bool(u.get("alert_email"))}
     return {"enabled": auth.enabled(), "logged_in": who is not None, "user": who,
             "multi_user": len(users.all_users()) > 1, "sandbox": sandbox.enabled(),
-            "requests": auth.enabled() and bool(settings.get("users.allow_requests", True))}
+            "requests": auth.enabled() and bool(settings.get("users.allow_requests", True)),
+            "forgot": auth.enabled() and notify.resets_possible(), "mail": mailer.enabled()}
 
 
 def _set_cookie(resp: JSONResponse, request: Request, name: str):
@@ -689,6 +747,7 @@ async def api_login(body: dict, request: Request):
     u = await asyncio.to_thread(users.verify, name, str(body.get("password", "")))
     if not u:
         auth.failed(f"ip:{ip}", f"user:{name}")
+        audit.record("login.fail", name, who="", ip=ip)
         await asyncio.sleep(1.0)
         st = await asyncio.to_thread(users.request_status, name, str(body.get("password", "")))
         if st == "pending":
@@ -697,6 +756,7 @@ async def api_login(body: dict, request: Request):
             raise HTTPException(403, "your account request was declined")
         raise HTTPException(401, "wrong username or password")
     users.touch_login(name)
+    audit.record("login", name, who=name, ip=ip)
     return _set_cookie(JSONResponse({"ok": True, "user": {"name": name, "role": u.get("role", "user")}}), request, name)
 
 
@@ -720,6 +780,7 @@ async def api_password(body: dict, request: Request):
     if not await asyncio.to_thread(users.verify, me, str(body.get("current", ""))):
         raise HTTPException(403, "current password is wrong")
     users.set_password(me, str(body.get("new", "")))
+    audit.record("password.change", me, ip=_client_ip(request))
     return _set_cookie(JSONResponse({"ok": True, "enabled": True}), request, me)
 
 
@@ -729,8 +790,49 @@ async def api_profile(body: dict):
     who = auth.signed_in()
     if not who or not users.get(who["name"]):
         raise HTTPException(401, "login required")
-    u = users.update(who["name"], **{k: body[k] for k in ("full_name", "email") if k in body})
-    return {"ok": True, "full_name": u["full_name"], "email": u["email"]}
+    u = users.update(who["name"], **{k: body[k] for k in ("full_name", "email", "alert_email") if k in body})
+    return {"ok": True, "full_name": u["full_name"], "email": u["email"], "alert_email": u["alert_email"]}
+
+
+@app.post("/api/auth/forgot")
+async def api_forgot(body: dict, request: Request):
+    """Email a password reset link. Always answers the same way, so it can't be used to find accounts."""
+    ip = _client_ip(request)
+    login = str(body.get("login") or "").strip().lower()[:254]
+    if auth.throttled(f"forgot:{ip}", limit=5, window=3600):
+        raise HTTPException(429, "too many reset requests from your address: try again in an hour")
+    auth.failed(f"forgot:{ip}")
+    if not notify.resets_possible():
+        raise HTTPException(404, "password reset by email isn't set up on this server: ask an admin")
+    name = users.find_user(login)
+    if name and not auth.throttled(f"forgot-user:{name}", limit=3, window=3600):
+        auth.failed(f"forgot-user:{name}")
+        u = users.get(name) or {}
+        if u.get("email") and not u.get("disabled"):
+            await notify.send_reset(name, u, ip)
+    audit.record("password.reset_request", login, who="", ip=ip)
+    return {"ok": True}
+
+
+@app.get("/api/auth/reset/{token}")
+async def api_reset_check(token: str):
+    return {"ok": True, "user": users.check_reset(token)}
+
+
+@app.post("/api/auth/reset/{token}")
+async def api_reset(token: str, body: dict, request: Request):
+    ip = _client_ip(request)
+    if auth.throttled(f"reset:{ip}", limit=10):
+        raise HTTPException(429, "too many attempts: wait 15 minutes")
+    try:
+        name = users.use_reset(token, str(body.get("password", "")))
+    except users.UserError:
+        auth.failed(f"reset:{ip}")
+        raise
+    audit.record("password.reset", name, who=name, ip=ip)
+    users.touch_login(name)
+    u = users.get(name) or {}
+    return _set_cookie(JSONResponse({"ok": True, "user": {"name": name, "role": u.get("role", "user")}}), request, name)
 
 
 @app.post("/api/auth/request")
@@ -749,6 +851,8 @@ async def api_account_request(body: dict, request: Request):
     await asyncio.to_thread(users.request_account, str(body.get("username", "")), str(body.get("password", "")),
                             str(body.get("full_name", "")), str(body.get("email", "")), str(body.get("org", "")),
                             str(body.get("reason", "")), ip)
+    audit.record("request.new", str(body.get("username", "")), str(body.get("email", "")), who="", ip=ip)
+    notify.request_received(body)
     return {"ok": True}
 
 
@@ -770,6 +874,7 @@ async def api_invite_redeem(token: str, body: dict, request: Request):
         auth.failed(f"inv:{ip}")
         raise
     users.touch_login(u["name"])
+    audit.record("invite.redeem", u["name"], who=u["name"], ip=ip)
     return _set_cookie(JSONResponse({"ok": True, "user": {"name": u["name"], "role": u["role"]}}), request, u["name"])
 
 
@@ -782,7 +887,8 @@ async def api_admin_users():
     out = []
     for n, u in users.all_users().items():
         mine = [l["name"] for l in ls if l["owner"] == n]
-        out.append({**users.public(n, u), "labs": len(mine), "running": sorted(set(mine) & running), "effective_quota": users.quota(n)})
+        out.append({**users.public(n, u), "labs": len(mine), "running": sorted(set(mine) & running), "effective_quota": users.quota(n),
+                    "disk_mb": round(notify.disk_used(n) / 1048576, 1)})
     return out
 
 
@@ -791,6 +897,10 @@ async def api_admin_user_create(body: dict):
     pw = str(body.get("password") or "") or secrets.token_urlsafe(12)
     u = users.create(str(body.get("username", "")), pw, role=str(body.get("role") or "user"), internet=bool(body.get("internet")),
                      full_name=str(body.get("full_name") or ""), email=str(body.get("email") or ""))
+    audit.record("user.create", u["name"], u["role"])
+    if body.get("send_link") and u.get("email"):
+        ok, err = await notify.send_welcome_reset(u["name"])
+        return {**u, "emailed": ok, "email_error": err}
     return {**u, "password": pw}
 
 
@@ -800,10 +910,12 @@ async def api_admin_user_update(name: str, body: dict):
     if name == auth.current()["name"] and (kw.get("disabled") or kw.get("role") == "user"):
         raise HTTPException(400, "you can't disable or demote yourself")
     u = users.update(name, **kw)
+    audit.record("user.update", name, ", ".join(f"{k}={v}" for k, v in kw.items() if k != "quota") + (" limits" if "quota" in kw else ""))
     if body.get("reset_password"):
         pw = secrets.token_urlsafe(12)
         users.set_password(name, pw)
         u["password"] = pw
+        audit.record("user.reset_password", name)
     if "internet" in kw or "role" in kw:
         await sandbox.refresh_firewall()
     return u
@@ -821,7 +933,18 @@ async def api_admin_user_delete(name: str, delete_labs: bool = False):
             await api_destroy(l)
         labs.delete(l)
     users.delete(name)
+    audit.record("user.delete", name, f"labs: {', '.join(owned)}" if owned else "")
     return {"ok": True, "deleted_labs": owned}
+
+
+@app.post("/api/admin/users/{name}/send-reset")
+async def api_admin_user_send_reset(name: str):
+    """Email the user a link to set a new password (instead of reading one out to them)."""
+    ok, err = await notify.send_welcome_reset(name, reset=True)
+    if not ok:
+        raise HTTPException(400, err)
+    audit.record("user.send_reset", name)
+    return {"ok": True}
 
 
 @app.post("/api/admin/labs/{lab}/owner")
@@ -830,10 +953,12 @@ async def api_admin_lab_owner(lab: str, body: dict):
     if not users.get(to):
         raise HTTPException(404, f"no user {to}")
     d = labs.load(lab)
+    was = d.get("owner")
     d["owner"] = to
     if "trusted" in body:
         d["trusted"] = bool(body["trusted"])
     labs.save(d)
+    audit.record("lab.owner", lab, f"{was} -> {to}" + (f", trusted={d.get('trusted')}" if "trusted" in body else ""))
     await sandbox.refresh_firewall()
     return {"ok": True}
 
@@ -848,12 +973,17 @@ async def api_admin_request_approve(rid: str, body: dict | None = None):
     u = users.approve_request(rid, auth.current()["name"], internet=bool((body or {}).get("internet")))
     if u.get("internet"):
         await sandbox.refresh_firewall()
+    audit.record("request.approve", u["name"])
+    notify.account_decision(u["name"], u.get("full_name", ""), u.get("email", ""), approved=True)
     return u
 
 
 @app.post("/api/admin/requests/{rid}/decline")
 async def api_admin_request_decline(rid: str):
-    users.decline_request(rid, auth.current()["name"])
+    r = users.decline_request(rid, auth.current()["name"])
+    if r["was"] == "pending":
+        audit.record("request.decline", r["username"])
+        notify.account_decision(r["username"], r.get("full_name", ""), r.get("email", ""), approved=False)
     return {"ok": True}
 
 
@@ -864,13 +994,111 @@ async def api_admin_invites():
 
 @app.post("/api/admin/invites")
 async def api_admin_invite_create(body: dict):
-    return users.create_invite(auth.current()["name"], role=str(body.get("role") or "user"),
-                               days=float(body.get("days") or 7), note=str(body.get("note") or ""))
+    to = str(body.get("email") or "").strip()
+    if to and not mailer.ADDR_RE.match(to):
+        raise HTTPException(400, "that email address doesn't look right")
+    inv = users.create_invite(auth.current()["name"], role=str(body.get("role") or "user"),
+                              days=float(body.get("days") or 7), note=str(body.get("note") or to or ""))
+    audit.record("invite.create", to or str(body.get("note") or ""), inv["role"])
+    if to:
+        ok, err = await notify.send_invite(to, inv)
+        inv.update(emailed=ok, email_error=err)
+    return inv
 
 
 @app.delete("/api/admin/invites/{iid}")
 async def api_admin_invite_delete(iid: str):
     users.revoke_invite(iid)
+    audit.record("invite.revoke", iid)
+    return {"ok": True}
+
+
+# ---------------- admin: email, audit ----------------
+@app.get("/api/admin/email")
+async def api_admin_email():
+    em = settings.public()["email"]
+    return {"settings": em, "status": mailer.STATUS, "site_url": mailer.site_url(), "admins": mailer.admin_recipients(),
+            "domain_default": bool(env("DOMAIN", ""))}
+
+
+@app.post("/api/admin/email/test")
+async def api_admin_email_test(body: dict):
+    """Send a test email with the saved settings; success marks them as working."""
+    to = str(body.get("to") or (users.get(auth.current()["name"]) or {}).get("email") or "").strip()
+    if not mailer.ADDR_RE.match(to):
+        raise HTTPException(400, "give an address to send the test to")
+    text, html_body = mailer.render("Test email", [
+        "This is a test from Patchyard. If you can read it, outgoing email works.",
+        f"Sent by {auth.current()['name']} from {mailer.site_url() or 'this server'}."])
+    ok, err = await mailer.send(to, "Patchyard test email", text, html_body, force=True)
+    audit.record("email.test", to, "ok" if ok else err)
+    if ok:
+        settings.set_email_verified(to)
+    return {"ok": ok, "error": err, "settings": settings.public()["email"]}
+
+
+@app.get("/api/admin/audit")
+async def api_admin_audit(who: str = "", q: str = "", limit: int = 500):
+    return await asyncio.to_thread(audit.tail, max(1, min(limit, 5000)), who.strip().lower(), q.strip()[:100])
+
+
+# ---------------- challenges ----------------
+@app.get("/api/challenges")
+async def api_challenges():
+    return {"builtin": challenges.list_builtin(), "published": challenges.list_published(),
+            "types": challenges.TYPES, "services": list(challenges.SERVICES), "protocols": list(challenges.PROTOCOLS)}
+
+
+@app.post("/api/challenges/{kind}/{cid}/start")
+async def api_challenge_start(kind: str, cid: str, body: dict):
+    quota_new_lab()
+    quota_disk()
+    me = auth.current()["name"]
+    name = check_name(str(body.get("name") or ""))
+    if kind == "builtin":
+        d = await asyncio.to_thread(challenges.start_builtin, cid, name)
+    elif kind == "published":
+        d = await asyncio.to_thread(challenges.start_published, cid, name)
+        for k in ("trusted", "workdir", "imported_from", "sandbox_subnet"):
+            d.pop(k, None)
+        labs.save(d)
+    else:
+        raise HTTPException(404, "no such challenge")
+    d = own_new(d["name"], me)
+    try:
+        quota_devices(d)
+    except HTTPException:
+        labs.delete(d["name"])
+        raise
+    audit.record("challenge.start", d["name"], f"{kind}/{cid}")
+    return d
+
+
+@app.post("/api/labs/{lab}/challenge/check")
+async def api_challenge_check(lab: str):
+    d = labs.load(lab)
+    async with lock(f"check:{lab}"):
+        return await challenges.check(d)
+
+
+@app.get("/api/labs/{lab}/challenge/result")
+async def api_challenge_result(lab: str):
+    return challenges.last_result(labs.load(lab)) or {}
+
+
+@app.post("/api/admin/challenges")
+async def api_admin_challenge_publish(body: dict):
+    d = labs.load(check_name(str(body.get("lab") or "")))
+    await devices.save_configs(d)
+    m = challenges.publish(d, auth.current()["name"], str(body.get("desc") or ""), str(body.get("level") or ""))
+    audit.record("challenge.publish", m["title"], d["name"])
+    return m
+
+
+@app.delete("/api/admin/challenges/{cid}")
+async def api_admin_challenge_unpublish(cid: str):
+    challenges.unpublish(cid)
+    audit.record("challenge.unpublish", cid)
     return {"ok": True}
 
 
@@ -995,9 +1223,8 @@ async def api_server_file_get(lab: str, node: str, kind: str, name: str):
 @app.put("/api/labs/{lab}/nodes/{node}/server/{kind}/{name}")
 async def api_server_file_put(lab: str, node: str, kind: str, name: str, request: Request):
     _, _, f = _server_file(lab, node, kind, name)
-    data = await request.body()
-    if len(data) > 20 * 1024 * 1024:
-        raise HTTPException(413, "files up to 20 MB")
+    data = await read_body(request, 20 * 1024 * 1024)
+    quota_disk(auth.lab_owner(lab), adding=len(data))
     f.parent.mkdir(parents=True, exist_ok=True)
     f.write_bytes(data)
     f.chmod(0o666)
@@ -1103,7 +1330,14 @@ async def api_traffic_stop(lab: str, jid: str):
 # ---------------- static UI ----------------
 UI = Path(env("UI", Path(__file__).resolve().parents[2] / "frontend" / "dist"))
 if UI.exists():
-    app.mount("/assets", StaticFiles(directory=UI / "assets"), name="assets")
+    class _Immutable(StaticFiles):
+        """Built assets have content hashes in their names: browsers may keep them for a year."""
+        async def get_response(self, path, scope):
+            r = await super().get_response(path, scope)
+            if r.status_code == 200:
+                r.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+            return r
+    app.mount("/assets", _Immutable(directory=UI / "assets"), name="assets")
 
     UI_ROOT = UI.resolve()
 
@@ -1113,4 +1347,4 @@ if UI.exists():
             raise HTTPException(404, "no such API route")
         f = (UI_ROOT / path).resolve()
         ok = path and f.is_file() and f.is_relative_to(UI_ROOT)  # block ../ traversal
-        return FileResponse(f if ok else UI_ROOT / "index.html")
+        return FileResponse(f if ok else UI_ROOT / "index.html", headers=None if ok else {"Cache-Control": "no-cache"})

@@ -207,6 +207,45 @@ Everything is measured from the host side, so nothing extra is installed in the 
 - **Traffic generator** starts `iperf3 -s` in the destination's namespace and `iperf3 -c` in the source's. Results (throughput, retransmits, or loss and jitter for UDP) come back as JSON.
 - **Simulation** runs tcpdump on the lab's ports. scapy decodes the frames (Ethernet, ARP, IP, ICMP, TCP/UDP, DNS, HTTP, OSPF, BGP, LDP, MPLS), and the UI replays them as animated steps on the canvas with per-packet details.
 
+## Challenges
+
+`challenges.py`. A challenge is `lab["challenge"]`: a title, instructions, a feedback level and a list of checks, each with a type, a device and points. `labs.save` validates it on every save (types, fields, show-only IOS commands), so the browser can't store anything the checker won't run.
+
+**Check** (`POST /api/labs/<lab>/challenge/check`) runs the checks against the live lab, six at a time with a 40 s limit each, and only ever reads:
+
+| Type | How it's read |
+| --- | --- |
+| ping, web page | `ping` / `curl` inside the device (`docker exec`), so the device's own resolver and routes are used |
+| IOS show | the IOS engine's batch runner (`ios.run_batch`), the same code as the CLI tab |
+| OSPF, BGP, route | `vtysh -c '… json'` through the protocol normalisers used by the dashboard |
+| interface / DHCP address | `nsenter -n ip -j addr` in the device's namespace |
+| server service | the server's process list, as on the Services tab |
+
+The result (score, best, completion time) goes to `challenge-result.json` in the lab folder, not `lab.json`, so it never races the browser's autosave. Built-in challenges are a template plus a `mutate` step (strip r3's OSPF, switch srv1's DHCP off). Publishing exports the lab as a zip into `<home>/challenges/`; starting one imports it as a new lab owned by the player.
+
+## Email
+
+`mailer.py` and `notify.py`. Settings live under `email` in `settings.json`. The password is write-only: the API returns `password_set` instead, and a blank password on save keeps the stored one. A send runs `smtplib` in a worker thread with a 45 s limit (STARTTLS, implicit TLS or plain), and errors are turned into actionable messages. **Send test email** records the fingerprint of the settings it succeeded with; the UI shows *Working* only while the current settings match it.
+
+Events and who gets them:
+
+- a new account request goes to admins with an email address, plus any extra addresses;
+- approve/decline, emailed invites and set-password links go to the person;
+- **Forgot password** sends a 32-byte token, stored as a SHA-256 hash with a one-hour expiry. It's single use, and asking again replaces it. The endpoint answers the same way for unknown accounts and is rate-limited per address and per account;
+- alert digests go to users who opted in: fired warning/critical alerts from their labs (admins: all labs), batched to at most one email per 10 minutes.
+
+Links use the configured site address or `https://$PATCHYARD_DOMAIN`, never the request's `Host` header, so a forged header can't redirect a reset link.
+
+## Performance
+
+Many browsers poll the same server, so the hot paths are cached:
+
+- `netinfo.containers()` (one `docker ps` plus PIDs) is shared by every caller for up to a second. Any `docker`/`containerlab` command that changes containers bumps a generation counter and invalidates it at once.
+- `labs.list_labs()` re-reads a `lab.json` only when its mtime or size changes. `users.json` is re-read only when it changes; it's checked on every authenticated request.
+- `settings.get()` walks the cached settings and copies only the value asked for.
+- The browser stops polling in hidden tabs. The Settings, Admin and Help screens are loaded on first use. Responses over 1 KB are gzip-compressed, and hashed UI assets are cached for a year.
+- `lab.json`, `users.json` and `settings.json` are written to a temp file and renamed, so readers never see half a file.
+
 ## Storage
 
 ```
@@ -215,8 +254,14 @@ Everything is measured from the host side, so nothing extra is installed in the 
 │   ├── lab.json                     topology, device properties, annotations
 │   ├── netlab-<lab>.clab.yml        generated containerlab topology
 │   ├── configs/<node>/              frr.conf, switch.sh, dnsmasq.conf, nginx.conf ...
-│   └── snapshots/                   automatic and named snapshots
-├── settings.json                    global settings (defaults merged in)
+│   ├── snapshots/                   automatic and named snapshots
+│   └── challenge-result.json        last challenge score, best score, completion time
+├── settings.json                    global settings (defaults merged in; mode 0600, holds the SMTP password)
+├── users.json                       accounts, invite / reset token hashes, account requests
+├── secret.key                       session signing key
+├── audit.log (+ .1)                 who did what, JSON lines, rotated at 5 MB
+├── challenges/<id>.zip + .json      challenges published to everyone
+├── caddy/                           certificates (HTTPS installs)
 ├── metrics.db                       SQLite: samples, alert history
 └── deploy/                          docker-compose.yml + .env (written by setup.sh)
 ```
@@ -242,7 +287,9 @@ Patchyard itself can start privileged containers and enter any namespace, so who
 - Lab lists and alerts are filtered to the caller's labs.
 - `PUT /api/labs/<lab>` keeps the server's `owner`/`trusted`/`sandbox_subnet` whatever the browser sends. For normal users it also refuses raw containerlab definitions (`sandbox.check_raw`) and images outside the allowed list.
 
-**Quotas** (`users.quota`): labs, labs running at once, devices per lab, and memory/CPU per device. They come from Settings `users.quota`, with per-user overrides; admins are unlimited. They're checked on create, save, deploy and live add.
+**Quotas** (`users.quota`): labs, labs running at once, devices per lab, memory/CPU per device, and disk (`max_disk_mb`, default 2048). They come from Settings `users.quota`, with per-user overrides; admins are unlimited. They're checked on create, save, deploy, live add, import, upload, snapshot and challenge start. Disk is the size of the user's lab folders, measured with a 60 s cache. A watcher pauses a user's running labs when they pass 110% of the allowance (a device writing into a bind-mounted folder), records it in the audit log and emails the owner.
+
+**Audit log** (`audit.py`): sign-ins and failures, password changes and resets, account requests, invites, user and role changes, settings changes (which sections), lab create/deploy/destroy/delete/move, challenge start/publish, and email tests. One JSON line each in `<home>/audit.log`, readable by admins in Admin → Audit log.
 
 **Sandbox** (`sandbox.py`, `proxy.py`; on with `--public` / `PATCHYARD_SANDBOX=1`):
 
@@ -286,3 +333,5 @@ On the host, `deploy/update.sh` pulls the new image and recreates the container.
 - There are no Cisco images (licensing). The IOS CLI is a translation layer over FRR: common IOS commands work, and anything it doesn't know goes to FRR as typed, so FRR's syntax rules apply there. One example is that FRR won't mix `network … area` with `ip ospf area` on the same router.
 - `?` lists the commands Patchyard translates. FRR-only commands work, but aren't listed.
 - Metrics come from the host and are per-container. They measure the Linux datapath, not a vendor ASIC.
+- The disk allowance counts lab folders. A container's own writable layer (packages installed from a shell) is in Docker's storage and isn't counted.
+- Challenge checks are run by the lab's owner, who can also read them in the editor. They're for practice, not exams.

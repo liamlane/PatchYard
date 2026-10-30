@@ -149,6 +149,7 @@ function Security({ s, notify, me }) {
     setBusy(false);
   };
   const [prof, setProf] = useState({ full_name: me?.full_name || "", email: me?.email || "" });
+  const [alertMail, setAlertMail] = useState(!!me?.alert_email);
   const saveProf = async () => {
     try { const r = await api.profile(prof); if (me) { me.full_name = r.full_name; me.email = r.email; } notify("Details saved", null, "ok"); }
     catch (e) { notify(e.message, null, "bad"); }
@@ -162,6 +163,11 @@ function Security({ s, notify, me }) {
       <Field label="Full name"><input value={prof.full_name} maxLength={80} autoComplete="name" onChange={(e) => setProf({ ...prof, full_name: e.target.value })} /></Field>
       <Field label="Email" hint="so the admin can reach you"><input type="email" value={prof.email} maxLength={254} autoComplete="email" onChange={(e) => setProf({ ...prof, email: e.target.value })} /></Field>
       <div className="row"><button onClick={saveProf} disabled={prof.full_name === (me.full_name || "") && prof.email === (me.email || "")}>Save details</button></div>
+      <Field label="Email me about alerts" hint={prof.email ? "a digest of warnings and critical alerts from your running labs, at most every 10 minutes" : "add your email address first"}>
+        <input type="checkbox" disabled={!me.email} checked={!!alertMail} onChange={async (e) => {
+          const v = e.target.checked; setAlertMail(v);
+          try { await api.profile({ alert_email: v }); me.alert_email = v; notify(v ? "You'll get alert emails" : "Alert emails off", null, "ok"); } catch (x) { setAlertMail(!v); notify(x.message, null, "bad"); }
+        }} /></Field>
     </>}
     <h3>Change password</h3>
     <Field label="Current password"><input type="password" value={cur} onChange={(e) => setCur(e.target.value)} autoComplete="current-password" /></Field>

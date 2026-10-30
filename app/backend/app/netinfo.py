@@ -5,15 +5,40 @@ port state from the container's own sysfs via /proc/<pid>/root/sys/class/net, an
 CPU / memory from the container's cgroup v2 files. One `docker ps` per cycle finds
 containers by containerlab's labels, so lab names containing dashes are unambiguous.
 """
-import time
+import asyncio, time
 from pathlib import Path
+from . import util
 from .util import run
 
 _PIDS: dict[str, int] = {}      # container id -> pid (stable while running)
+TTL = 1.0                       # every poller (status, alerts, metrics, admin) shares one `docker ps` per second
+_CACHE: dict = {"t": 0.0, "v": None, "task": None, "gen": -1}
+
+
+def invalidate():
+    """Forget the cached container list (util.run also does this after any docker/containerlab change)."""
+    _CACHE["t"] = 0.0
 
 
 async def containers() -> dict:
-    """{(lab, node): {"id", "name", "state", "pid"}} for every containerlab container."""
+    """{(lab, node): {"id", "name", "state", "pid"}} for every containerlab container (cached ~1 s)."""
+    now = time.monotonic()
+    if _CACHE["v"] is not None and now - _CACHE["t"] < TTL and _CACHE["gen"] == util.GEN[0]:
+        return {k: dict(v) for k, v in _CACHE["v"].items()}
+    task = _CACHE["task"]
+    gen = util.GEN[0]
+    if task is None or task.done() or _CACHE.get("task_gen") != gen:
+        task = _CACHE["task"] = asyncio.ensure_future(_containers())
+        _CACHE["task_gen"], stamp = gen, now
+    else:
+        stamp = None
+    res = await asyncio.shield(task)
+    if stamp is not None and gen == util.GEN[0]:
+        _CACHE["v"], _CACHE["t"], _CACHE["gen"] = res, stamp, gen
+    return {k: dict(v) for k, v in res.items()}
+
+
+async def _containers() -> dict:
     fmt = '{{.ID}}|{{.Names}}|{{.State}}|{{.Label "containerlab"}}|{{.Label "clab-node-name"}}'
     rc, out, _ = await run("docker", "ps", "-a", "--filter", "label=containerlab", "--format", fmt)
     res, need = {}, []

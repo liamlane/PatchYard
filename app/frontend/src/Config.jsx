@@ -1030,7 +1030,7 @@ export function FirewallConfigX({ lab, node, running, notify, onRename, onUpdate
     api.nodeState(lab.name, node.id).then(setSt).catch(() => {});
     if (running) api.firewallStatus(lab.name, node.id).then(setFw).catch(() => {});
   }, [lab.name, node.id, running]);
-  useEffect(() => { load(); const t = setInterval(load, 8000); return () => clearInterval(t); }, [load]);
+  useEffect(() => { load(); const t = setInterval(() => { if (!document.hidden) load(); }, 8000); return () => clearInterval(t); }, [load]);
   const save = async () => {
     setBusy(true);
     try {

@@ -84,8 +84,22 @@ sudo /opt/patchyard/deploy/update.sh
 
 This pulls the newest image and restarts the container. Running labs keep running while it restarts.
 
-- **Pin a version:** set `PATCHYARD_IMAGE=ghcr.io/liamlane/patchyard:0.12.0` in `/opt/patchyard/deploy/.env`.
+- **Pin a version:** set `PATCHYARD_IMAGE=ghcr.io/liamlane/patchyard:0.13.0` in `/opt/patchyard/deploy/.env`.
 - **New release notice:** Settings → About shows when a new release is out.
+
+## Check it works
+
+```bash
+sudo docker exec patchyard python -m app.selftest          # OSPF triangle: about 2 minutes
+sudo docker exec patchyard python -m app.selftest --full   # also the small office (firewall, DHCP, DNS, web, PAT)
+sudo docker exec patchyard python -m app.selftest --keep   # leave the test labs running to look at
+```
+
+The self-test talks to the running app as the first admin. It creates labs from templates, deploys them, waits for OSPF, services and pings, checks them with the same engine as [challenges](challenges.md), then destroys and deletes them. On a server installed with `--public` it also checks the lab egress firewall and the package proxy. Every line should be a ✓, and the exit code is 0 when everything passed.
+
+## Email
+
+Patchyard can send account emails, password reset links and alert digests through any SMTP provider. Set it up in the app: your name → **Admin** → **Email**, then **Save and send test**. The steps, and what to do if the test can't connect, are in [vps.md](vps.md#5-email). Links in emails use the site address you set there, or `https://<--domain>`.
 
 ## Reverse proxy
 
@@ -135,4 +149,9 @@ Patchyard was called netlab before 0.12.0. To upgrade, run the 0.12.0 installer,
 | Clash with an existing 172.31.255.0/24 network | change the management subnet in Settings → Lab defaults, then redeploy |
 | Locked out | `sudo docker exec patchyard python -m app.auth reset-password NAME` (prints a new password) |
 | Create or reset an admin from the shell | `echo 'new-password' \| sudo docker exec -i patchyard python -m app.auth create-admin NAME` |
+| Email test: "couldn't connect" | the host or port is wrong, or your server's provider blocks outgoing SMTP; try 587 with STARTTLS (port 25 is often blocked) |
+| Email test: "refused the username or password" | Microsoft 365 and Gmail need an *app password* (and SMTP AUTH enabled for the mailbox in Microsoft 365) |
+| Email test: "refused the From address" | the From address must be the account you sign in with, or one it may send as |
+| No "Forgot your password?" link | email must be on, *Forgot password* ticked under Admin → Email, and a site address known |
+| "your labs use … of your … MB" | the per-user disk allowance (Admin → Limits & sandbox, or per user under Users → Limits): delete snapshots, server files or labs |
 | A user's lab devices can't install packages | the mirror must be in Admin → Limits & sandbox → package mirrors; check `sudo docker logs patchyard \| grep proxy` |

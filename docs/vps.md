@@ -70,13 +70,24 @@ sudo apt install -y unattended-upgrades && sudo dpkg-reconfigure -plow unattende
 
 Docker publishes no ports for Patchyard: everything runs on the host network, and Caddy is the only thing listening on 80/443. Lab devices' management networks are internal.
 
-## 5. Let people in
+## 5. Email
+
+Patchyard sends email through your mail provider's SMTP server: account requests to you, approvals and invite links to people, "Forgot password?" links, and alert digests for users who opt in.
+
+1. Your name → **Admin** → **Email**. Pick a provider preset or fill in the server, port, security, username and password (for Microsoft 365 or Gmail, an *app password*). The password is write-only: it's never sent back to the browser.
+2. Set the **From address** to one your account is allowed to send as.
+3. The **site address** defaults to `https://<your --domain>`; links in emails use it (never the address a request came from).
+4. Tick **Send email**, enter your own address and press **Save and send test**. The status line turns to *Working* only once a test was delivered with the settings as they are now; change anything and it asks for a new test.
+
+If the test can't connect, the VPS provider may block outgoing SMTP. Port 587 with STARTTLS is the most likely to be open; port 25 often isn't. Add your own email under Settings → Account so admin emails reach you.
+
+## 6. Let people in
 
 There are two ways in: invite links, and account requests from the sign-in page.
 
 ### Account requests
 
-The sign-in page has a **Request one** link. The form asks for full name, email, organisation (optional), username, password, what they'll use it for, and agreement to personal/non-commercial use. When a request arrives you get a toast, a red dot on your avatar and a count in your account menu. Open **Admin** → **Requests**, read it, and **Approve** or **Decline**. Patchyard doesn't send email, so let them know yourself; the email address is on the request.
+The sign-in page has a **Request one** link. The form asks for full name, email, organisation (optional), username, password, what they'll use it for, and agreement to personal/non-commercial use. When a request arrives you get a toast, a red dot on your avatar, a count in your account menu and, with email set up, an email. Open **Admin** → **Requests**, read it, and **Approve** or **Decline**. With email set up the person is told either way; without it, let them know yourself (their address is on the request).
 
 Turn requests off under **Admin** → **Limits & sandbox** if you only want invites. Each address can send 3 requests an hour, and at most 50 can wait at once.
 
@@ -98,6 +109,17 @@ In **Admin**:
   - the package mirrors labs may reach,
   - the management address pool (default `172.30.0.0/16`, cut into /26 per lab).
 
+## 7. Check it works
+
+After installing or updating, run the self-test. It deploys real labs through the API, waits for routing and services, checks them, and cleans up:
+
+```bash
+sudo docker exec patchyard python -m app.selftest          # OSPF triangle, about 2 minutes
+sudo docker exec patchyard python -m app.selftest --full   # also the small office: firewall, DHCP, DNS, web, PAT
+```
+
+Every line should be a ✓. On a `--public` server it also checks the lab egress firewall and the package proxy.
+
 ## How the sandbox works
 
 | Threat | What stops it |
@@ -106,7 +128,7 @@ In **Admin**:
 | Reaching another user's devices | Each lab has its own Docker management network (containerlab `external-access: false`); Docker isolates them from each other. Data-plane cables are veth pairs between that lab's own devices. |
 | Attacking the internet from your IP | An nftables table on the host (`ip patchyard`) rejects any traffic from the lab pool except replies, and Alpine package downloads (`apk`) go through Patchyard's proxy, which only connects to the allowed mirrors on ports 80/443. |
 | Reaching the host's services | The same table rejects lab traffic to the host except the proxy port; Patchyard's own web port is bound to 127.0.0.1. |
-| Using up the server | Memory and CPU caps per device, and limits on devices, labs and running labs per user. |
+| Using up the server | Memory and CPU caps per device, limits on devices, labs and running labs per user, and a disk allowance per user (lab folders, uploads, snapshots). Labs that keep growing past it are paused and their owner emailed. |
 | Mounting host folders or running odd images | Normal users can't import from a host path or set raw containerlab options (privileged, binds outside the lab, devices, network mode…). They can only pick images from the allowed list. |
 | Seeing or changing other users' labs | Every `/api/labs/<lab>/…` request and console WebSocket is checked against the lab's owner. Someone else's lab answers "not found". |
 | Password guessing | 8 failed logins per username (20 per address) in 15 minutes locks further tries for 15 minutes. Passwords are PBKDF2-SHA256 with 240,000 rounds. |
@@ -115,7 +137,7 @@ In **Admin**:
 **Limits worth knowing:**
 
 - A user with a shell can still use their own devices' CPU and memory up to the caps.
-- Disk use isn't capped per user yet, but uploads to lab servers are limited to 20 MB per file.
+- The disk allowance covers each user's lab folders. A container's own filesystem (packages a user installs from a shell) lives in Docker's storage and isn't counted; device memory caps limit what tmpfs can hold.
 - All lab devices share the host kernel, like every container platform. Keep the kernel patched (unattended-upgrades).
 - Everyone can see the server's version and which kernel features it has.
 
@@ -123,8 +145,10 @@ In **Admin**:
 
 Everything lives in `/opt/patchyard`:
 
-- `users.json` (accounts, invite hashes and account requests),
-- `settings.json`,
+- `users.json` (accounts, invite hashes, account requests and password-reset hashes),
+- `audit.log` (who did what),
+- `challenges/` (challenges published to everyone),
+- `settings.json` (including the SMTP password; the file is readable by root only),
 - `secret.key` (session signing),
 - `labs/` (every lab, config and snapshot),
 - `metrics.db`,
@@ -141,4 +165,5 @@ sudo docker logs -f patchyard-caddy                               # HTTPS / cert
 sudo docker exec patchyard python -m app.auth list                # accounts
 sudo docker exec patchyard python -m app.auth reset-password NAME # prints a new password
 sudo nft list table ip patchyard                                  # the lab egress firewall and its counters
+sudo docker exec patchyard python -m app.selftest                 # deploy a lab and check it end to end
 ```

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api.js";
+import { ChallengeList } from "./Challenge.jsx";
 import { systemInfo, missingFeatures } from "./sysinfo.js";
 import { labNameFor, me } from "./me.js";
 import { Modal, Icon } from "./ui.jsx";
@@ -199,14 +200,15 @@ function Labs({ lab, notify, onOpenLab, refreshLabs, close }) {
   );
 }
 
-export default function LabManager({ lab, deployed, initial = "templates", notify, onOpenLab, onClose, refreshLabs, onReload, onRedeploy }) {
-  const [tab, setTab] = useState(lab ? initial : "templates");
-  const tabs = [["labs", "Labs", "grid"], ["templates", "Templates", "layers"], ...(lab ? [["snapshots", "Snapshots", "camera"]] : []), ["share", "Clone · export · import", "copy"]];
+export default function LabManager({ lab, deployed, initial = "templates", notify, onOpenLab, onStartChallenge, onClose, refreshLabs, onReload, onRedeploy }) {
+  const [tab, setTab] = useState(!lab && initial === "snapshots" ? "templates" : initial);
+  const tabs = [["labs", "Labs", "grid"], ["templates", "Templates", "layers"], ["challenges", "Challenges", "flag"], ...(lab ? [["snapshots", "Snapshots", "camera"]] : []), ["share", "Clone · export · import", "copy"]];
   return (
     <Modal title="Lab manager" onClose={onClose} wide>
       <div className="seg mgr-tabs">{tabs.map(([k, l, i]) => <button key={k} className={tab === k ? "on" : ""} onClick={() => setTab(k)}><Icon name={i} size={15} /> {l}</button>)}</div>
       {tab === "labs" && <Labs lab={lab} notify={notify} onOpenLab={onOpenLab} refreshLabs={refreshLabs} close={onClose} />}
       {tab === "templates" && <Templates notify={notify} onOpenLab={onOpenLab} close={onClose} />}
+      {tab === "challenges" && <ChallengeList notify={notify} onStart={onStartChallenge || onOpenLab} close={onClose} />}
       {tab === "snapshots" && lab && <Snapshots lab={lab} deployed={deployed} notify={notify} onReload={onReload} onRedeploy={onRedeploy} />}
       {tab === "share" && <Share lab={lab} notify={notify} onOpenLab={onOpenLab} close={onClose} refreshLabs={refreshLabs} />}
     </Modal>

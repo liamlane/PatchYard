@@ -96,7 +96,7 @@ export function TrafficPanel({ lab, states, onClose, notify, preset }) {
 
 const BRAND = <div className="brand"><svg width="26" height="26" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="3" /><circle cx="19" cy="5" r="3" /><circle cx="19" cy="19" r="3" /><path d="M7.6 10.6l8.8-4.2M7.6 13.4l8.8 4.2" /></svg>Patchyard</div>;
 
-export function Login({ onDone, canRequest }) {
+export function Login({ onDone, canRequest, canForgot }) {
   const [mode, setMode] = useState(() => (canRequest && location.pathname === "/request-account" ? "request" : "signin"));
   const [user, setUser] = useState("");
   const [pw, setPw] = useState("");
@@ -107,6 +107,7 @@ export function Login({ onDone, canRequest }) {
     try { await api.login(user.trim().toLowerCase(), pw); onDone(); } catch (x) { setErr(x.message); }
     setBusy(false);
   };
+  if (mode === "forgot") return <Forgot onBack={() => setMode("signin")} />;
   if (mode !== "signin") return <RequestAccount sent={mode === "sent"} onSent={() => setMode("sent")} onBack={() => { setMode("signin"); history.replaceState(null, "", "/"); }} />;
   return (
     <div className="login">
@@ -116,9 +117,71 @@ export function Login({ onDone, canRequest }) {
         <label className="col">Password<input type="password" value={pw} onChange={(e) => setPw(e.target.value)} autoComplete="current-password" /></label>
         {err && <p className="error">{err}</p>}
         <button className="primary big" disabled={busy || !pw}>Sign in</button>
+        {canForgot && <p className="hint"><button type="button" className="link" onClick={() => setMode("forgot")}>Forgot your password?</button></p>}
         {canRequest
           ? <p className="hint">No account? <button type="button" className="link" onClick={() => { setMode("request"); history.replaceState(null, "", "/request-account"); }}>Request one</button>, or use an invite link if you were sent one.</p>
           : <p className="hint">No account? Ask whoever runs this server for an invite link.</p>}
+      </form>
+    </div>
+  );
+}
+
+function Forgot({ onBack }) {
+  const [login, setLogin] = useState("");
+  const [sent, setSent] = useState(false);
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const go = async (e) => {
+    e.preventDefault(); setBusy(true); setErr("");
+    try { await api.forgot(login.trim()); setSent(true); } catch (x) { setErr(x.message); }
+    setBusy(false);
+  };
+  return (
+    <div className="login">
+      <form className="login-card" onSubmit={go}>
+        {BRAND}
+        <h3>Reset your password</h3>
+        {sent ? <>
+          <p>If that matches an account with an email address, a reset link is on its way. It works once, for an hour.</p>
+          <p className="hint">Nothing after a few minutes? Check spam, or ask the admin.</p>
+        </> : <>
+          <label className="col">Username or email<input autoFocus value={login} onChange={(e) => setLogin(e.target.value)} autoComplete="username" autoCapitalize="none" /></label>
+          {err && <p className="error">{err}</p>}
+          <button className="primary big" disabled={busy || !login.trim()}>Email me a reset link</button>
+        </>}
+        <p className="hint"><button type="button" className="link" onClick={onBack}>Back to sign in</button></p>
+      </form>
+    </div>
+  );
+}
+
+export function ResetPage({ token }) {
+  const [state, setState] = useState(null);
+  const [f, setF] = useState({ password: "", again: "" });
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { api.resetCheck(token).then(setState).catch((e) => setState({ error: e.message })); }, [token]);
+  const go = async (e) => {
+    e.preventDefault(); setBusy(true); setErr("");
+    try { await api.resetDo(token, f.password); location.href = "/"; } catch (x) { setErr(x.message); }
+    setBusy(false);
+  };
+  return (
+    <div className="login">
+      <form className="login-card" onSubmit={go}>
+        {BRAND}
+        {!state && <p className="hint">Checking your link…</p>}
+        {state?.error && <><p className="error">{state.error}</p><a href="/">Go to sign in</a></>}
+        {state?.ok && <>
+          <h3>Choose a new password</h3>
+          <p className="hint">For <b>{state.user}</b>. Other sessions of this account will be signed out.</p>
+          <input type="text" autoComplete="username" value={state.user} readOnly hidden />
+          <label className="col">New password<input type="password" autoFocus value={f.password} autoComplete="new-password" onChange={(e) => setF({ ...f, password: e.target.value })} />
+            <span className="hint">At least 10 characters.</span></label>
+          <label className="col">Repeat password<input type="password" value={f.again} className={f.again && f.again !== f.password ? "bad" : ""} autoComplete="new-password" onChange={(e) => setF({ ...f, again: e.target.value })} /></label>
+          {err && <p className="error">{err}</p>}
+          <button className="primary big" disabled={busy || f.password.length < 10 || f.password !== f.again}>Set password and sign in</button>
+        </>}
       </form>
     </div>
   );

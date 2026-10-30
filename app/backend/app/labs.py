@@ -296,15 +296,34 @@ def workdir(lab: dict) -> Path:
     return Path(lab["workdir"]) if lab.get("workdir") else lab_dir(lab["name"])
 
 
+_LIST: dict[str, tuple[float, int, dict]] = {}     # lab folder -> (mtime, size, summary)
+
+
 def list_labs():
+    """Summaries of every lab; lab.json is only re-read when it changed (this runs on every poll)."""
     DATA.mkdir(parents=True, exist_ok=True)
-    out = []
+    out, seen = [], set()
     for p in sorted(DATA.iterdir()):
         f = p / "lab.json"
-        if f.exists():
+        try:
+            st = f.stat()
+        except OSError:
+            continue
+        seen.add(p.name)
+        hit = _LIST.get(p.name)
+        if hit and hit[0] == st.st_mtime and hit[1] == st.st_size:
+            out.append(dict(hit[2]))
+            continue
+        try:
             d = json.loads(f.read_text())
-            out.append({"name": d["name"], "nodes": len(d.get("nodes", [])), "links": len(d.get("links", [])),
-                        "owner": d.get("owner") or "", "trusted": bool(d.get("trusted"))})
+        except (OSError, ValueError):
+            continue
+        summ = {"name": d["name"], "nodes": len(d.get("nodes", [])), "links": len(d.get("links", [])),
+                "owner": d.get("owner") or "", "trusted": bool(d.get("trusted")), "challenge": bool((d.get("challenge") or {}).get("checks"))}
+        _LIST[p.name] = (st.st_mtime, st.st_size, summ)
+        out.append(dict(summ))
+    for k in set(_LIST) - seen:
+        del _LIST[k]
     return out
 
 
@@ -341,9 +360,16 @@ def save(lab: dict):
                      "w": max(60.0, min(4000.0, float(a.get("w", 200)))), "h": max(40.0, min(4000.0, float(a.get("h", 120)))),
                      "text": str(a.get("text", ""))[:2000], "color": str(a.get("color", "yellow"))[:20]})
     lab["annotations"] = anns
+    if lab.get("challenge") is not None:
+        from . import challenges
+        lab["challenge"] = challenges.normalise(lab["challenge"], {n["id"] for n in lab.get("nodes", [])})
+        if not lab["challenge"]:
+            lab.pop("challenge", None)
     d = lab_dir(lab["name"])
     d.mkdir(parents=True, exist_ok=True)
-    (d / "lab.json").write_text(json.dumps(lab, indent=2))
+    tmp = d / f".lab.json.{os.getpid()}.tmp"          # atomic: a crash or a concurrent read never sees half a file
+    tmp.write_text(json.dumps(lab, indent=2))
+    os.replace(tmp, d / "lab.json")
 
 
 def patch_props(name: str, node_id: str, fn) -> dict:

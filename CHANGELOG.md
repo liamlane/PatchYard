@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.13.0
+- **Email (SMTP)** in Admin → Email: provider presets, write-only password, "Send test email", and a status that only says *Working* once a test was delivered with the current settings. Emails:
+  - new account requests to admins (with Reply-To the requester);
+  - approvals and declines to the person; invite links sent by email; "set your password" links for accounts an admin creates;
+  - **Forgot password?** on the sign-in page: a one-hour, single-use reset link (same answer whether or not the account exists; rate-limited per address and per account);
+  - alert digests for users who opt in (Settings → Account), at most one every 10 minutes.
+- **Lab challenges:** a Challenge panel (flag button) with instructions and a **Check** button that scores the running lab. Nine check types: ping (or blocked), web page, IOS show output, OSPF FULL, BGP Established, route in table, interface address, DHCP address, server service. Points, three feedback levels, best score and completion time. The challenge lives in the lab, so clone and export carry it. Lab manager → **Challenges** has two built-ins (*Finish the OSPF triangle*, *Get the office online*), and admins can publish any challenge to everyone.
+- **Audit log** (Admin → Audit log): sign-ins and failures, account, invite, request and settings changes, lab create/deploy/destroy/delete, challenge and email events.
+- **Disk allowance per user** (default 2 GB): refused at the limit for new labs, imports, uploads and snapshots; labs that keep growing past it are paused and the owner emailed. Disk use per user in Admin → Users.
+- **Self-test:** `docker exec patchyard python -m app.selftest [--full]` deploys real labs and checks routing, services, the IOS CLI and the sandbox end to end.
+- Faster and steadier:
+  - one shared `docker ps` per second for every poller (status, alerts, metrics, admin), refreshed straight after any container change;
+  - the lab list, users file and settings are cached and only re-read when they change; settings lookups no longer copy the whole file;
+  - hidden browser tabs stop polling and catch up when shown;
+  - the settings, admin and help screens load on first use; gzip for the UI and API; hashed assets cached for a year;
+  - lab files are written atomically (a crash or a concurrent read never sees half a file);
+  - uploads and imports are refused by size before being read into memory.
+- Docs: a challenges guide ([docs/challenges.md](docs/challenges.md)), email setup and the self-test in [docs/vps.md](docs/vps.md) and [docs/install.md](docs/install.md), challenges, email, performance and the audit log in [docs/architecture.md](docs/architecture.md), new screenshots, and a link to the public server at [patchyard.fastlanetechnology.co.uk](https://patchyard.fastlanetechnology.co.uk).
+- Fixed:
+  - labs whose names start with another lab's name plus a dash (`a` and `a-b`) could show each other's devices;
+  - a command that timed out left a zombie process;
+  - a template or clone that broke a device limit left the lab behind;
+  - the login throttle table never shrank.
+
 ## 0.12.1
 - **Account requests:** a *Request one* link on the sign-in page asks for full name, email, organisation (optional), username, password, what it's for, and acceptance of the terms. Requests wait in **Admin → Requests**; approving creates the account with the username and password the person chose. Admins get a toast, a red dot on their avatar and a count in the menu. Signing in while waiting (or after a decline) says so. Turn requests off under Admin → Limits & sandbox. Limits: 3 requests per address per hour, 50 waiting at once, a hidden bot trap; declined requests are kept 30 days.
 - **Names and emails on accounts:** invite links now ask for them too; admins see and edit them under Users; everyone can change theirs in Settings → Account.

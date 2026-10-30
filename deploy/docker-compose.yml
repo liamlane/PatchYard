@@ -23,6 +23,7 @@ services:
       PATCHYARD_UPDATE_CHECK: ${PATCHYARD_UPDATE_CHECK:-1}
       PATCHYARD_BIND: ${PATCHYARD_BIND:-0.0.0.0}
       PATCHYARD_SANDBOX: ${PATCHYARD_SANDBOX:-0}
+      PATCHYARD_DOMAIN: ${PATCHYARD_DOMAIN:-}            # links in emails (Admin → Email can override)
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${PATCHYARD_HOME:-/opt/patchyard}:${PATCHYARD_HOME:-/opt/patchyard}   # labs, snapshots, settings, metrics history

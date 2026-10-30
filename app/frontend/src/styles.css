@@ -618,3 +618,41 @@ select.act-accept { color: var(--ok); } select.act-drop, select.act-reject { col
 .login-card input, .login-card textarea { width: 100%; min-width: 0; box-sizing: border-box; }
 .login-card textarea { font-family: inherit; }
 .login-card .chk input { width: 16px; height: 16px; padding: 0; flex: none; }
+.email-state { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 8px; background: var(--panel-2); border: 1px solid var(--line); margin: 0 0 8px; font-weight: 500; }
+.email-state.es-up { border-color: color-mix(in srgb, var(--ok) 50%, var(--line)); }
+.email-state.es-warn { border-color: color-mix(in srgb, var(--warn) 60%, var(--line)); }
+.chk.block { display: flex; margin: 4px 0; white-space: normal; }
+.formrow label.wide { flex: 1 1 100%; }
+.formrow label.wide input { width: 100%; }
+.secstate.bad { border-color: var(--bad); }
+.audit td { vertical-align: top; }
+.audit .warnrow td { background: color-mix(in srgb, var(--warn) 10%, transparent); }
+/* challenges */
+.challenge .rich p { margin: 0 0 10px; line-height: 1.55; }
+.challenge .rich ul { margin: 0 0 10px; padding-left: 20px; }
+.challenge .rich li { margin: 3px 0; line-height: 1.5; }
+.challenge .rich code { font: 12px var(--mono); background: var(--panel-2); padding: 1px 5px; border-radius: 4px; }
+.score { display: flex; align-items: baseline; gap: 10px; margin: 12px 0 6px; }
+.score b { font-size: 28px; }
+.score span { color: var(--muted, var(--idle)); font-size: 12.5px; }
+.score.done b { color: var(--ok); }
+.bar span.ok { background: var(--ok); }
+.done-t { color: var(--ok); font-weight: 600; margin: 6px 0; }
+.checks { list-style: none; padding: 0; margin: 10px 0 0; }
+.checks li { display: flex; gap: 8px; align-items: flex-start; padding: 6px 0; border-top: 1px solid var(--line-2, var(--line)); font-size: 13px; }
+.checks .ck { width: 18px; flex: none; font-weight: 700; text-align: center; }
+.checks li.ok .ck { color: var(--ok); } .checks li.bad .ck { color: var(--bad); }
+.checks li > div { flex: 1; min-width: 0; }
+.checks .pts { color: var(--muted, var(--idle)); font-size: 11.5px; flex: none; }
+.ch-edit label.col { display: flex; flex-direction: column; gap: 4px; margin: 0 0 10px; }
+.ch-edit textarea { font-family: inherit; font-size: 13px; resize: vertical; }
+.ck-row { border: 1px solid var(--line); border-radius: 8px; padding: 8px; margin: 0 0 8px; background: var(--panel-2); display: flex; flex-direction: column; gap: 6px; }
+.ck-row .row { gap: 6px; flex-wrap: wrap; align-items: center; }
+.ck-row select, .ck-row input { min-width: 0; }
+.ck-fields input:not(.narrow):not([type=checkbox]) { flex: 1 1 120px; }
+.ck-n { font-weight: 700; color: var(--muted, var(--idle)); width: 16px; }
+.ck-label { width: 100%; font-size: 12.5px; }
+.pts-in { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted, var(--idle)); }
+.pts-in input { width: 40px; }
+.ch-actions { margin-top: 12px; }
+.audit td:first-child { white-space: nowrap; }

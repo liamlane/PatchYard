@@ -250,6 +250,7 @@ ping / traceroute / write memory / copy running-config tftp: / reload`}</Cmd>
     body: () => <>
       <ul>
         <li><b>Labs:</b> your labs. Open or delete them.</li>
+        <li><b>Challenges:</b> activities with instructions and a Check button. See <i>Challenges</i>.</li>
         <li><b>Templates:</b> twelve ready-made labs with working configs and notes: OSPF triangle, OSPF multi-area, BGP between three ASes, serial WAN hub-and-spoke, router-on-a-stick, campus with STP, campus RSTP + LACP, NAT and ACLs at the edge, central DHCP with relay, small office, firewall edge with DMZ, and dual-ISP MPLS L3VPN.</li>
         <li><b>Snapshots:</b> save, diff and restore.</li>
         <li><b>Clone · export · import:</b> copy a lab, download it as a zip, or import a zip someone sent you.</li>
@@ -332,13 +333,43 @@ end`}</Cmd></li>
       </Steps>
     </> },
 
+  { id: "challenges", group: "Labs", title: "Challenges", icon: "flag", kw: "challenge activity exercise check score assessment points instructor student publish",
+    body: () => <>
+      <p>A challenge is a lab with instructions and a <B>Check</B> button that scores what you've built, like a Packet Tracer activity. Checks look at the running network, so only what really works counts.</p>
+      <h4>Play one</h4>
+      <Steps>
+        <li><B>Lab manager</B> → <B>Challenges</B>. Pick one and press <B>Start</B>: you get your own copy.</li>
+        <li>The <B>Challenge</B> panel (flag button, top right) shows what to do. <B>Deploy</B> the lab.</li>
+        <li>Configure until you think it's done, then press <B>Check</B>. You see your score and, depending on the challenge, which checks passed and why the others didn't.</li>
+      </Steps>
+      <h4>Make one</h4>
+      <Steps>
+        <li>Build the lab in the state players should start from (for example with one router unconfigured), and <B>Save running configs</B>.</li>
+        <li>Open the Challenge panel and write the instructions.</li>
+        <li>Add checks. Each one has points:
+          <ul>
+            <li><b>Ping</b> succeeds, or is blocked (for ACL and firewall tasks).</li>
+            <li><b>Web page</b> loads from a device, optionally containing some text.</li>
+            <li><b>IOS show</b> output contains (or doesn't contain) text, for example <code>show ip ospf neighbor</code> contains <code>FULL</code>.</li>
+            <li><b>OSPF neighbours</b> in FULL, <b>BGP sessions</b> Established, a <b>route</b> in the table (optionally from a protocol).</li>
+            <li><b>Interface address</b>, <b>DHCP address</b> in a subnet, a <b>server service</b> running.</li>
+          </ul></li>
+        <li>Choose what players see: every check and why, pass/fail only, or just the score.</li>
+        <li>Solve it yourself once and press Check to make sure it reaches 100%. Then put the lab back to its starting state (a snapshot helps).</li>
+      </Steps>
+      <p>The challenge is saved in the lab, so it travels with clone and export: send someone the zip and they can play it. Admins can also publish a challenge to everyone on the server from the editor.</p>
+      <Tip>Players own their copy, so a determined one can open the editor and read the checks. Challenges are for learning, not exams.</Tip>
+    </> },
+
   { id: "account", group: "Your account", title: "Accounts, privacy and limits", icon: "keyboard", kw: "account password name email private labs limit quota sandbox internet package request invite sign out",
     when: (p) => p.accounts,
     body: () => <>
       <ul>
         <li><b>Your labs are private.</b> Other users can't see or open them. Admins can, to help or tidy up.</li>
         <li><b>Account and password:</b> your name (top right) → Account and password. Changing your password signs out your other sessions.</li>
-        <li><b>Limits:</b> the server may limit how many labs you keep, how many run at once, devices per lab, and memory/CPU per device. You'll get a clear message when you hit one; ask the admin if you need more.</li>
+        <li><b>Forgot your password?</b> If the server sends email, use the link on the sign-in page; a reset link arrives by email and works once, for an hour. Otherwise ask the admin.</li>
+        <li><b>Alert emails:</b> Account and password → <i>Email me about alerts</i> sends a digest of warnings and critical alerts from your labs, at most every 10 minutes.</li>
+        <li><b>Limits:</b> the server may limit how many labs you keep, how many run at once, devices per lab, memory/CPU per device, and the disk your labs use (configs, files on lab servers, snapshots). A lab that keeps growing past the disk limit is paused. You'll get a clear message when you hit one; ask the admin if you need more.</li>
         <li><b>Lab internet:</b> on a shared server, lab devices can't reach the internet, except the package mirrors servers and firewalls need when they start. Lab-to-lab traffic inside your lab is unaffected.</li>
       </ul>
     </> },
@@ -347,18 +378,21 @@ end`}</Cmd></li>
     body: () => <>
       <p>Your name (top right) → <B>Admin</B>. A red dot on your avatar means account requests are waiting.</p>
       <ul>
-        <li><b>Users:</b> role, name and email, limits, lab internet, reset password (shown once), disable, delete.</li>
+        <li><b>Users:</b> role, name and email, disk used, limits, lab internet, email a reset link (or reset and see a new password once), disable, delete.</li>
         <li><b>Requests:</b> people who asked from the sign-in page. Approve creates the account with the username and password they chose; decline tells them when they next try to sign in. Turn requests off under Limits & sandbox.</li>
-        <li><b>Invites:</b> one-time links that create an account directly, with a role and an expiry.</li>
+        <li><b>Invites:</b> one-time links that create an account directly, with a role and an expiry. Give an email address and Patchyard sends the link.</li>
         <li><b>All labs:</b> every lab and its owner. Open, destroy, move to another user, or mark a lab trusted (runs privileged, outside the sandbox: only for your own labs).</li>
         <li><b>Limits & sandbox:</b> default limits, allowed images, package mirrors, the management address pool.</li>
+        <li><b>Email:</b> your mail provider's SMTP details, which emails to send, and <B>Send test email</B>. The status line only says "Working" after a test was delivered with the settings as they are now.</li>
+        <li><b>Audit log:</b> sign-ins (and failed ones), account, invite and settings changes, labs created, deployed and deleted.</li>
       </ul>
       <h4>On the host</h4>
       <Cmd>{`sudo /opt/patchyard/deploy/update.sh                              # update
 sudo docker logs -f patchyard                                     # app log
 sudo docker exec patchyard python -m app.auth list                # accounts
 sudo docker exec patchyard python -m app.auth reset-password NAME # new password
-sudo nft list table ip patchyard                                  # lab egress firewall`}</Cmd>
+sudo nft list table ip patchyard                                  # lab egress firewall
+sudo docker exec patchyard python -m app.selftest [--full]        # deploy real labs and check them`}</Cmd>
       <p>Back up <code>/opt/patchyard</code>: it holds accounts, settings, every lab and the certificates.</p>
     </> },
 

@@ -122,7 +122,7 @@ function Physical({ lab, node, running }) {
     let alive = true;
     const load = () => api.ifaces(lab.name, node.id).then((d) => alive && setIfs(d)).catch((e) => alive && setErr(e.message));
     load();
-    const t = setInterval(load, 4000);
+    const t = setInterval(() => { if (!document.hidden) load(); }, 4000);
     return () => { alive = false; clearInterval(t); };
   }, [running, lab.name, node.id]);
   const byName = Object.fromEntries((ifs || []).map((i) => [i.name, i]));

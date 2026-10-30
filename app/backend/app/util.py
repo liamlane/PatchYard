@@ -29,7 +29,20 @@ def check_host(v: str) -> str:
     return v
 
 
+GEN = [0]          # bumped by any command that starts/stops/changes containers (netinfo's cache key)
+_MUTATE = {"run", "rm", "start", "stop", "kill", "restart", "pause", "unpause", "create", "deploy", "destroy", "network", "container"}
+
+
 async def run(*args, input: bytes | None = None, timeout: float = 60, cwd=None):
+    mut = len(args) > 1 and str(args[0]).rsplit("/", 1)[-1] in ("docker", "containerlab", "clab") and str(args[1]) in _MUTATE
+    try:
+        return await _run(args, input, timeout, cwd)
+    finally:
+        if mut:
+            GEN[0] += 1
+
+
+async def _run(args, input, timeout, cwd):
     try:
         p = await asyncio.create_subprocess_exec(
             *args, cwd=cwd,
@@ -40,7 +53,11 @@ async def run(*args, input: bytes | None = None, timeout: float = 60, cwd=None):
     try:
         out, err = await asyncio.wait_for(p.communicate(input), timeout)
     except asyncio.TimeoutError:
-        p.kill()
+        try:
+            p.kill()
+            await asyncio.wait_for(p.wait(), 5)          # reap it, no zombies
+        except (ProcessLookupError, asyncio.TimeoutError):
+            pass
         return 124, "", f"timed out after {timeout}s"
     return p.returncode, out.decode(errors="replace"), err.decode(errors="replace")
 
@@ -59,15 +76,9 @@ async def dsh(lab, node, script: str, timeout: float = 30):
 
 
 async def container_states(lab: str) -> dict:
-    rc, out, _ = await run("docker", "ps", "-a", "--filter", f"name=^clab-{lab}-",
-                           "--format", "{{.Names}}|{{.State}}")
-    states = {}
-    prefix = f"clab-{lab}-"
-    for line in out.splitlines():
-        name, _, state = line.partition("|")
-        if name.startswith(prefix):
-            states[name[len(prefix):]] = state
-    return states
+    """{node: state} for one lab, by containerlab's labels (a name prefix would mix up lab 'a' and lab 'a-b')."""
+    from . import netinfo
+    return {node: c["state"] for (l, node), c in (await netinfo.containers()).items() if l == lab}
 
 
 async def container_pid(lab, node) -> int | None:

@@ -107,10 +107,20 @@ def enabled() -> bool:
 _FAILS: dict[str, list[float]] = {}
 
 
+_PRUNED = [0.0]
+
+
 def throttled(key: str, limit=8, window=900) -> bool:
     now = time.time()
+    if now - _PRUNED[0] > 600:                       # drop stale keys so the table can't grow forever
+        _PRUNED[0] = now
+        for k in [k for k, v in _FAILS.items() if not v or now - v[-1] > 3600]:
+            del _FAILS[k]
     xs = [t for t in _FAILS.get(key, []) if now - t < window]
-    _FAILS[key] = xs
+    if xs:
+        _FAILS[key] = xs
+    else:
+        _FAILS.pop(key, None)
     return len(xs) >= limit
 
 

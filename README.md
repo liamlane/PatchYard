@@ -9,6 +9,8 @@ A self-hosted network lab that looks and feels like Packet Tracer but runs real 
 
 You build, configure, break and watch it all from a browser, with an IOS-style CLI on every router and switch.
 
+**Try it:** a public Patchyard server runs at **[patchyard.fastlanetechnology.co.uk](https://patchyard.fastlanetechnology.co.uk)**. Accounts are approved by hand: use **Request one** on the sign-in page, and you'll hear back once it's approved.
+
 ![A dual-ISP MPLS L3VPN lab on the Patchyard canvas](docs/images/screen-canvas-dual-isp.png)
 
 ## Install
@@ -37,7 +39,7 @@ curl -fsSL https://raw.githubusercontent.com/liamlane/patchyard/main/deploy/inst
 
 See **[docs/vps.md](docs/vps.md)**.
 
-Update with `sudo /opt/patchyard/deploy/update.sh`. Settings → About tells you when a new release is out.
+Update with `sudo /opt/patchyard/deploy/update.sh`. Settings → About tells you when a new release is out. To check a new install or update end to end, run `sudo docker exec patchyard python -m app.selftest`: it deploys a real lab, checks routing, services and the CLI, and cleans up.
 
 ## What it does
 
@@ -119,6 +121,8 @@ A Services tab with a page per service, each with an On/Off switch and a running
   - a management network per lab,
   - no internet except package mirrors.
 - **HTTPS** comes from Let's Encrypt.
+- **Email:** account requests, invites, password resets and alert digests through your SMTP provider, with a test button.
+- **Audit log** and a **disk allowance** per user.
 
 ### Manage
 
@@ -135,6 +139,7 @@ A Services tab with a page per service, each with an On/Off switch and a running
   - dual-ISP MPLS L3VPN.
 - **Labs:** snapshots with diff and restore, clone, and zip export and import.
 - **Access:** an admin login.
+- **Challenges:** Packet Tracer-style activities with instructions and a Check button that scores the running lab. Two built in; make your own from any lab, share them as zips or publish them to everyone on the server ([docs/challenges.md](docs/challenges.md)).
 - **Help:** a built-in, searchable how-to guide covering every feature, with step-by-step walkthroughs.
 
 ## Screenshots
@@ -151,6 +156,10 @@ A Services tab with a page per service, each with an On/Off switch and a running
 | Switch on the Open vSwitch engine: LACP port-channel | Firewall: PAT and port forwards with hit counters |
 | ![Admin panel, users](docs/images/screen-admin-users.png) | ![Admin panel, invite links](docs/images/screen-admin-invites.png) |
 | Admin: users, roles, limits, lab internet, reset/disable/delete | Admin: one-time invite links |
+| ![A challenge with its checks](docs/images/screen-challenge.png) | ![Lab manager, Challenges](docs/images/screen-challenges.png) |
+| Challenge panel: instructions, Check button, what's checked | Lab manager: built-in and published challenges |
+| ![Admin, Email](docs/images/screen-admin-email.png) | ![Admin, Audit log](docs/images/screen-admin-audit.png) |
+| Admin: SMTP with presets, what to send, Save and send test | Admin: audit log of sign-ins, accounts, settings and labs |
 | ![Server Services tab, DHCP page](docs/images/screen-services.png) | ![Alert rules in Settings](docs/images/screen-settings-alerts.png) |
 | Server DHCP: a pool per subnet, reservations, live leases | Alert rules with hold times, severities and ping probes |
 
@@ -181,6 +190,17 @@ Everything that has to survive an update lives in `/opt/patchyard` on the host: 
 | Packaging | Docker image on GHCR, docker compose, GitHub Actions |
 
 The full walk-through is in [docs/architecture.md](docs/architecture.md).
+
+## Documentation
+
+| Guide | What's in it |
+| --- | --- |
+| [docs/install.md](docs/install.md) | Installing on any Linux host, options, updating, troubleshooting |
+| [docs/vps.md](docs/vps.md) | Hosting for other people: HTTPS, accounts, email, sandbox, self-test, backups |
+| [docs/proxmox.md](docs/proxmox.md) | Running it in a Proxmox VM |
+| [docs/challenges.md](docs/challenges.md) | Playing and writing challenges, every check type |
+| [docs/architecture.md](docs/architecture.md) | How it works inside, security model, storage |
+| In the app | The **?** button opens a searchable how-to guide with walkthroughs |
 
 ## Security
 

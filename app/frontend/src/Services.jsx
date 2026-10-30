@@ -81,7 +81,7 @@ export default function ServicesX({ lab, node, running, onUpdateNode, notify }) 
   useEffect(() => {
     let stop = false;
     const load = () => api.serverStatus(lab.name, node.id).then((r) => !stop && setLive(r)).catch(() => {});
-    load(); const t = setInterval(load, 5000);
+    load(); const t = setInterval(() => { if (!document.hidden) load(); }, 5000);
     return () => { stop = true; clearInterval(t); };
   }, [lab.name, node.id, running]);
   if (node.raw) return <p className="empty">Imported device: edit its service files in the lab folder.</p>;
@@ -274,7 +274,7 @@ export function FileArea({ lab, node, kind, notify }) {
   const [files, setFiles] = useState([]);
   const pick = useRef(null);
   const load = () => api.serverFiles(lab.name, node.id, kind).then(setFiles).catch(() => {});
-  useEffect(() => { load(); const t = setInterval(load, 6000); return () => clearInterval(t); }, [lab.name, node.id, kind]); // eslint-disable-line
+  useEffect(() => { load(); const t = setInterval(() => { if (!document.hidden) load(); }, 6000); return () => clearInterval(t); }, [lab.name, node.id, kind]); // eslint-disable-line
   const upload = async (fl) => {
     for (const f of fl) {
       try { await api.serverFilePut(lab.name, node.id, kind, f); } catch (e) { notify(`${f.name}: ${e.message}`, null, "bad"); }
@@ -301,7 +301,7 @@ export function SyslogView({ lab, node, running }) {
   const [lines, setLines] = useState([]);
   const [filter, setFilter] = useState("");
   const load = () => api.syslog(lab.name, node.id).then((r) => setLines(r.lines)).catch(() => {});
-  useEffect(() => { load(); const t = setInterval(load, 4000); return () => clearInterval(t); }, [lab.name, node.id, running]); // eslint-disable-line
+  useEffect(() => { load(); const t = setInterval(() => { if (!document.hidden) load(); }, 4000); return () => clearInterval(t); }, [lab.name, node.id, running]); // eslint-disable-line
   const shown = lines.filter((l) => !filter || l.toLowerCase().includes(filter.toLowerCase()));
   return (
     <div className="syslog">

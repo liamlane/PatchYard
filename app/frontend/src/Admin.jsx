@@ -3,8 +3,8 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "./api.js";
 import { Modal, Icon } from "./ui.jsx";
 
-const TABS = [["users", "Users", "grid"], ["requests", "Requests", "flag"], ["invites", "Invites", "plus"], ["labs", "All labs", "layers"], ["limits", "Limits & sandbox", "gear"]];
-const QK = [["max_labs", "Labs"], ["max_running_labs", "Running at once"], ["max_devices", "Devices per lab"], ["device_memory_mb", "Memory per device (MB)"], ["device_cpus", "CPUs per device"]];
+const TABS = [["users", "Users", "grid"], ["requests", "Requests", "flag"], ["invites", "Invites", "plus"], ["labs", "All labs", "layers"], ["limits", "Limits & sandbox", "gear"], ["email", "Email", "bell"], ["audit", "Audit log", "diff"]];
+const QK = [["max_labs", "Labs"], ["max_running_labs", "Running at once"], ["max_devices", "Devices per lab"], ["device_memory_mb", "Memory per device (MB)"], ["device_cpus", "CPUs per device"], ["max_disk_mb", "Disk (MB)"]];
 const ago = (t) => (!t ? "never" : (() => { const s = Date.now() / 1000 - t; return s < 120 ? "just now" : s < 7200 ? `${Math.round(s / 60)} min ago` : s < 172800 ? `${Math.round(s / 3600)} h ago` : `${Math.round(s / 86400)} days ago`; })());
 
 export default function Admin({ tab = "users", onTab, onClose, notify, me, onOpenLab }) {
@@ -21,6 +21,8 @@ export default function Admin({ tab = "users", onTab, onClose, notify, me, onOpe
           {tab === "invites" && <Invites notify={notify} />}
           {tab === "labs" && <AllLabs notify={notify} onOpenLab={(n) => { onOpenLab(n); onClose(); }} />}
           {tab === "limits" && <Limits notify={notify} />}
+          {tab === "email" && <Email notify={notify} me={me} />}
+          {tab === "audit" && <Audit notify={notify} />}
         </div>
       </div>
     </Modal>
@@ -30,7 +32,7 @@ export default function Admin({ tab = "users", onTab, onClose, notify, me, onOpe
 function Users({ notify, me }) {
   const [list, setList] = useState(null);
   const [edit, setEdit] = useState(null);
-  const [nu, setNu] = useState({ username: "", role: "user", full_name: "", email: "" });
+  const [nu, setNu] = useState({ username: "", role: "user", full_name: "", email: "", send_link: true });
   const [prof, setProf] = useState(null);
   const [secret, setSecret] = useState(null);
   const load = useCallback(() => api.adminUsers().then(setList).catch((e) => notify(e.message, null, "bad")), [notify]);
@@ -42,7 +44,7 @@ function Users({ notify, me }) {
   if (!list) return <p className="hint">Loading…</p>;
   return (<>
     <h3>Users</h3>
-    <table className="grid compact admin-users"><thead><tr><th>User</th><th>Name and email</th><th>Role</th><th>Labs</th><th>Running</th><th>Last sign-in</th><th>Lab internet</th><th /></tr></thead>
+    <table className="grid compact admin-users"><thead><tr><th>User</th><th>Name and email</th><th>Role</th><th>Labs</th><th>Disk</th><th>Running</th><th>Last sign-in</th><th>Lab internet</th><th /></tr></thead>
       <tbody>{list.map((u) => (
         <tr key={u.name} className={u.disabled ? "hint" : ""}>
           <td><b>{u.name}</b>{u.name === me?.name && <span className="hint"> (you)</span>}{u.disabled && <span className="hint"> · disabled</span>}</td>
@@ -50,6 +52,7 @@ function Users({ notify, me }) {
           <td><select value={u.role} disabled={u.name === me?.name} onChange={(e) => patch(u.name, { role: e.target.value }, `${u.name} is now ${e.target.value === "admin" ? "an admin" : "a user"}`)}>
             <option value="user">user</option><option value="admin">admin</option></select></td>
           <td>{u.labs}{u.effective_quota.max_labs ? <span className="hint"> / {u.effective_quota.max_labs}</span> : ""}</td>
+          <td className={u.effective_quota.max_disk_mb && u.disk_mb > u.effective_quota.max_disk_mb ? "error" : ""}>{u.disk_mb < 1 ? "<1" : Math.round(u.disk_mb)}{u.effective_quota.max_disk_mb ? <span className="hint"> / {u.effective_quota.max_disk_mb}</span> : ""} MB</td>
           <td className="mono">{u.running.join(", ") || "—"}</td>
           <td>{ago(u.last_login)}</td>
           <td><input type="checkbox" checked={u.role === "admin" || u.internet} disabled={u.role === "admin"} title="Full internet from this user's lab devices (otherwise package mirrors only)"
@@ -57,6 +60,9 @@ function Users({ notify, me }) {
           <td><span className="row">
             <button className="link" onClick={() => setProf(prof?.name === u.name ? null : { name: u.name, full_name: u.full_name || "", email: u.email || "" })}>Details</button>
             <button className="link" onClick={() => setEdit(edit === u.name ? null : u.name)}>Limits</button>
+            {u.email && <button className="link" title="Email them a one-hour link to choose a new password" onClick={async () => {
+              try { await api.adminSendReset(u.name); notify(`Reset link sent to ${u.email}`, null, "ok"); } catch (e) { notify(e.message, null, "bad"); }
+            }}>Email reset link</button>}
             <button className="link" onClick={() => confirm(`Reset ${u.name}'s password? They'll be signed out.`) && patch(u.name, { reset_password: true })}>Reset password</button>
             {u.name !== me?.name && <button className="link" onClick={() => patch(u.name, { disabled: !u.disabled }, u.disabled ? `${u.name} enabled` : `${u.name} disabled and signed out`)}>{u.disabled ? "Enable" : "Disable"}</button>}
             {u.name !== me?.name && <button className="link danger" onClick={async () => {
@@ -84,8 +90,15 @@ function Users({ notify, me }) {
       <label>Full name<input value={nu.full_name} maxLength={80} onChange={(e) => setNu({ ...nu, full_name: e.target.value })} /></label>
       <label>Email<input type="email" value={nu.email} maxLength={254} onChange={(e) => setNu({ ...nu, email: e.target.value })} /></label>
       <label>Role<select value={nu.role} onChange={(e) => setNu({ ...nu, role: e.target.value })}><option value="user">user</option><option value="admin">admin</option></select></label>
+      {nu.email && <label className="chk" title="Email them a link to choose their own password, instead of showing you one"><input type="checkbox" checked={nu.send_link} onChange={(e) => setNu({ ...nu, send_link: e.target.checked })} /> Email a set-password link</label>}
       <button className="primary" disabled={!/^[a-z][a-z0-9_-]{2,23}$/.test(nu.username)} onClick={async () => {
-        try { const r = await api.adminUserCreate(nu); setSecret({ name: r.name, password: r.password }); setNu({ username: "", role: "user", full_name: "", email: "" }); load(); } catch (e) { notify(e.message, null, "bad"); }
+        try {
+          const r = await api.adminUserCreate({ ...nu, send_link: nu.send_link && !!nu.email });
+          if (r.emailed) notify(`${r.name} created: a set-password link went to ${r.email}`, null, "ok");
+          else if (r.email_error) notify(`${r.name} created, but the email failed`, r.email_error, "warn");
+          else setSecret({ name: r.name, password: r.password });
+          setNu({ username: "", role: "user", full_name: "", email: "", send_link: true }); load();
+        } catch (e) { notify(e.message, null, "bad"); }
       }}>Create</button>
     </div>
   </>);
@@ -121,7 +134,7 @@ function Requests({ notify, onChange }) {
   };
   return (<>
     <h3>Account requests</h3>
-    <p className="hint">People ask for an account from the sign-in page (turn that off under Limits & sandbox). Approving creates the account with the username and password they chose, and the server's default limits. Patchyard doesn't send email: let them know yourself.</p>
+    <p className="hint">People ask for an account from the sign-in page (turn that off under Limits & sandbox). Approving creates the account with the username and password they chose, and the server's default limits. With email set up (Admin → Email) they're told by email either way; otherwise let them know yourself.</p>
     {!pending.length && <p className="empty">No requests waiting.</p>}
     {pending.map((r) => (
       <div key={r.id} className="req-card">
@@ -146,7 +159,7 @@ function Requests({ notify, onChange }) {
 
 function Invites({ notify }) {
   const [list, setList] = useState([]);
-  const [f, setF] = useState({ role: "user", days: 7, note: "" });
+  const [f, setF] = useState({ role: "user", days: 7, note: "", email: "" });
   const [made, setMade] = useState(null);
   const load = useCallback(() => api.adminInvites().then(setList).catch((e) => notify(e.message, null, "bad")), [notify]);
   useEffect(() => { load(); }, [load]);
@@ -157,8 +170,15 @@ function Invites({ notify }) {
     <div className="formrow">
       <label>Role<select value={f.role} onChange={(e) => setF({ ...f, role: e.target.value })}><option value="user">user</option><option value="admin">admin</option></select></label>
       <label>Valid for (days)<input className="narrow" value={f.days} onChange={(e) => setF({ ...f, days: e.target.value.replace(/[^\d.]/g, "") })} /></label>
+      <label>Email it to <span className="hint">(optional)</span><input type="email" value={f.email} placeholder="name@example.com" onChange={(e) => setF({ ...f, email: e.target.value.trim() })} /></label>
       <label>Note<input value={f.note} placeholder="who it's for" onChange={(e) => setF({ ...f, note: e.target.value })} /></label>
-      <button className="primary" onClick={async () => { try { setMade(await api.adminInviteCreate(f)); setF({ ...f, note: "" }); load(); } catch (e) { notify(e.message, null, "bad"); } }}>Create link</button>
+      <button className="primary" onClick={async () => {
+        try {
+          const r = await api.adminInviteCreate(f); setMade(r);
+          if (r.emailed) notify(`Invite emailed to ${f.email}`, null, "ok"); else if (r.email_error) notify("Link created, but the email failed", r.email_error, "warn");
+          setF({ ...f, note: "", email: "" }); load();
+        } catch (e) { notify(e.message, null, "bad"); }
+      }}>{f.email ? "Create and email" : "Create link"}</button>
     </div>
     {made && <div className="secstate on invite-made"><Icon name="flag" /><span className="mono">{link}</span>
       <button onClick={() => { navigator.clipboard?.writeText(link); notify("Link copied", null, "ok"); }}>Copy</button>
@@ -227,5 +247,126 @@ function Limits({ notify }) {
     <label className="col">Package mirrors labs may reach (one host per line; subdomains included)
       <textarea rows={3} className="mono" value={(sb.proxy_allow || []).join("\n")} onChange={(e) => upd("sandbox", "proxy_allow", e.target.value.split("\n"))} /></label>
     <div className="row"><span className="grow" />{dirty && <span className="hint">Unsaved changes</span>}<button className="primary" disabled={!dirty} onClick={save}>Save</button></div>
+  </>);
+}
+
+const SECS = [["starttls", "STARTTLS (usually port 587)"], ["ssl", "SSL/TLS (usually port 465)"], ["none", "None (port 25, not recommended)"]];
+const NOTIFY = [["requests", "New account requests (to admins)"], ["accounts", "Approvals, declines, invites and set-password links (to the person)"],
+  ["password_reset", "“Forgot password?” on the sign-in page"], ["alerts", "Alert digests to users who opt in (Settings → Account)"]];
+const PRESETS = [["Microsoft 365", { host: "smtp.office365.com", port: 587, security: "starttls" }], ["Gmail / Google Workspace", { host: "smtp.gmail.com", port: 587, security: "starttls" }],
+  ["Fasthosts", { host: "smtp.livemail.co.uk", port: 587, security: "starttls" }], ["SendGrid", { host: "smtp.sendgrid.net", port: 587, security: "starttls", username: "apikey" }],
+  ["Mailgun (EU)", { host: "smtp.eu.mailgun.org", port: 587, security: "starttls" }]];
+
+function Email({ notify, me }) {
+  const [all, setAll] = useState(null);
+  const [info, setInfo] = useState(null);
+  const [e, setE] = useState(null);
+  const [dirty, setDirty] = useState(false);
+  const [to, setTo] = useState(me?.email || "");
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState(null);
+  const load = useCallback(async () => {
+    try { const [s, i] = await Promise.all([api.settings(), api.adminEmail()]); setAll(s); setE(s.email); setInfo(i); setDirty(false); }
+    catch (x) { notify(x.message, null, "bad"); }
+  }, [notify]);
+  useEffect(() => { load(); }, [load]);
+  if (!e) return <p className="hint">Loading…</p>;
+  const upd = (k, v) => { setE({ ...e, [k]: v }); setDirty(true); setResult(null); };
+  const save = async () => {
+    try { const r = await api.saveSettings({ ...all, email: e }); setAll({ ...r, _meta: all._meta }); setE(r.email); setDirty(false); notify("Email settings saved", null, "ok"); api.adminEmail().then(setInfo).catch(() => {}); return true; }
+    catch (x) { notify(x.message, null, "bad"); return false; }
+  };
+  const test = async () => {
+    setBusy(true); setResult(null);
+    try {
+      if (dirty && !(await save())) { setBusy(false); return; }
+      const r = await api.adminEmailTest(to); setResult(r);
+      if (r.settings) setE((cur) => ({ ...cur, verified: r.settings.verified, working: r.settings.working, password_set: r.settings.password_set }));
+      api.adminEmail().then(setInfo).catch(() => {});
+    } catch (x) { setResult({ ok: false, error: x.message }); }
+    setBusy(false);
+  };
+  const state = !e.host || !e.from_addr ? ["off", "Not set up"] : dirty ? ["warn", "Unsaved changes"] : e.working ? ["up", `Working: test email delivered to ${e.verified.to} ${ago(e.verified.at)}`]
+    : ["warn", "Saved, not tested yet: send a test to confirm it works"];
+  return (<>
+    <h3>Outgoing email</h3>
+    <div className={`email-state es-${state[0]}`}><span className={`led led-${state[0] === "up" ? "up" : state[0] === "warn" ? "warn" : "off"}`} /> {state[1]}{e.working && !e.enabled ? " (but turned off below)" : ""}</div>
+    <p className="hint">Patchyard sends email through your mail provider's SMTP server. Nothing goes out until you turn it on and a test has worked.</p>
+    <div className="formrow">
+      <label>Provider preset<select value="" onChange={(x) => { const p = PRESETS.find(([n]) => n === x.target.value); if (p) { setE({ ...e, ...p[1] }); setDirty(true); } }}>
+        <option value="">Fill in from…</option>{PRESETS.map(([n]) => <option key={n}>{n}</option>)}</select></label>
+    </div>
+    <div className="formrow">
+      <label>SMTP server<input value={e.host} placeholder="smtp.example.com" onChange={(x) => upd("host", x.target.value.trim())} /></label>
+      <label>Port<input className="narrow" value={e.port} onChange={(x) => upd("port", x.target.value.replace(/\D/g, ""))} /></label>
+      <label>Security<select value={e.security} onChange={(x) => upd("security", x.target.value)}>{SECS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select></label>
+    </div>
+    <div className="formrow">
+      <label>Username<input value={e.username} autoComplete="off" placeholder="often the full email address" onChange={(x) => upd("username", x.target.value)} /></label>
+      <label>Password<input type="password" autoComplete="new-password" value={e.password} placeholder={e.password_set ? "saved (leave blank to keep)" : "app password or API key"} onChange={(x) => upd("password", x.target.value)} /></label>
+      {e.password_set && <button className="link" onClick={() => { setE({ ...e, password: "", password_clear: true, password_set: false }); setDirty(true); }}>Remove saved password</button>}
+    </div>
+    <div className="formrow">
+      <label>From address<input type="email" value={e.from_addr} placeholder="patchyard@yourdomain" onChange={(x) => upd("from_addr", x.target.value.trim())} /></label>
+      <label>From name<input value={e.from_name} onChange={(x) => upd("from_name", x.target.value)} /></label>
+    </div>
+    <div className="formrow">
+      <label className="wide">Site address (for links in emails)<input value={e.site_url} placeholder={info?.site_url || "https://lab.example.com"} onChange={(x) => upd("site_url", x.target.value.trim())} />
+        <span className="hint">{e.site_url ? "" : info?.site_url ? `Blank uses ${info.site_url} from the installer.` : "Needed for invite, reset and sign-in links."}</span></label>
+    </div>
+    <div className="formrow">
+      <label className="wide">Also send admin emails to <span className="hint">(comma-separated; admins with an email address always get them)</span>
+        <input value={(e.admin_to || []).join(", ")} placeholder="it@yourdomain" onChange={(x) => upd("admin_to", x.target.value.split(/[,\s]+/).filter(Boolean))} /></label>
+    </div>
+    <p className="hint">Admin emails go to: {info?.admins?.length ? info.admins.join(", ") : <b>nobody yet: add your email in Settings → Account, or above</b>}</p>
+    <h4>Send emails for</h4>
+    {NOTIFY.map(([k, l]) => <label key={k} className="chk block"><input type="checkbox" checked={e.notify[k]} onChange={(x) => upd("notify", { ...e.notify, [k]: x.target.checked })} /> {l}</label>)}
+    <label className="chk block"><input type="checkbox" checked={e.allow_invalid_cert} onChange={(x) => upd("allow_invalid_cert", x.target.checked)} /> Accept an invalid TLS certificate <span className="hint">(only for an internal relay you trust)</span></label>
+    <h4>Turn it on</h4>
+    <label className="chk block"><input type="checkbox" checked={e.enabled} onChange={(x) => upd("enabled", x.target.checked)} /> <b>Send email</b></label>
+    <div className="row"><span className="grow" />{dirty && <span className="hint">Unsaved changes</span>}<button disabled={!dirty} onClick={load}>Discard</button><button className="primary" disabled={!dirty} onClick={save}>Save</button></div>
+    <h4>Test it</h4>
+    <div className="formrow">
+      <label>Send a test to<input type="email" value={to} placeholder="you@example.com" onChange={(x) => setTo(x.target.value.trim())} /></label>
+      <button className="primary" disabled={busy || !to || !e.host || !e.from_addr} onClick={test}>{busy ? "Sending…" : dirty ? "Save and send test" : "Send test email"}</button>
+    </div>
+    {result && (result.ok
+      ? <div className="secstate on"><Icon name="flag" /> Sent. Check the inbox (and spam) for "Patchyard test email". The settings are now marked as working.</div>
+      : <div className="secstate bad"><Icon name="x" /> <span><b>Couldn't send:</b> {result.error}</span></div>)}
+    {info?.status?.last_error && <p className="hint">Last failure ({ago(info.status.last_error_at)}): {info.status.last_error}</p>}
+    {info?.status && <p className="hint">Since Patchyard started: {info.status.sent} sent, {info.status.failed} failed.</p>}
+    <p className="hint">Tip: if the test can't connect, your server's host may block outgoing SMTP; port 587 with STARTTLS is the most likely to be allowed.</p>
+  </>);
+}
+
+const ACTIONS = { "login": "Signed in", "login.fail": "Failed sign-in", "password.change": "Changed password", "password.reset_request": "Asked for a reset link",
+  "password.reset": "Reset password by email", "request.new": "Requested an account", "request.approve": "Approved request", "request.decline": "Declined request",
+  "invite.create": "Created invite", "invite.revoke": "Revoked invite", "invite.redeem": "Used invite", "user.create": "Created user", "user.update": "Changed user",
+  "user.delete": "Deleted user", "user.reset_password": "Reset password", "user.send_reset": "Emailed reset link", "settings.change": "Changed settings",
+  "lab.create": "Created lab", "lab.delete": "Deleted lab", "lab.deploy": "Deployed", "lab.destroy": "Destroyed", "lab.owner": "Moved lab",
+  "email.test": "Sent test email", "challenge.start": "Started challenge", "challenge.publish": "Published challenge", "challenge.unpublish": "Unpublished challenge",
+  "disk.pause": "Paused labs (disk limit)" };
+
+function Audit({ notify }) {
+  const [rows, setRows] = useState(null);
+  const [who, setWho] = useState("");
+  const [q, setQ] = useState("");
+  const load = useCallback(() => api.adminAudit(who, q).then(setRows).catch((e) => notify(e.message, null, "bad")), [who, q, notify]);
+  useEffect(() => { const t = setTimeout(load, 250); return () => clearTimeout(t); }, [load]);
+  return (<>
+    <h3>Audit log</h3>
+    <p className="hint">Sign-ins, account changes, settings and lab lifecycle, newest first. Kept in the data folder (audit.log, rotated at 5 MB).</p>
+    <div className="formrow">
+      <label>User<input value={who} placeholder="any" onChange={(e) => setWho(e.target.value.trim().toLowerCase())} /></label>
+      <label>Search<input value={q} placeholder="lab, address, action…" onChange={(e) => setQ(e.target.value)} /></label>
+      <button onClick={load}>Refresh</button>
+    </div>
+    {!rows ? <p className="hint">Loading…</p> : (
+      <table className="grid compact audit"><thead><tr><th>When</th><th>Who</th><th>What</th><th>Target</th><th>Detail</th><th>Address</th></tr></thead>
+        <tbody>{rows.map((r, i) => (
+          <tr key={i} className={r.action === "login.fail" || r.action === "disk.pause" ? "warnrow" : ""}>
+            <td title={new Date(r.ts * 1000).toLocaleString()}>{ago(r.ts)}</td><td>{r.who || <span className="hint">—</span>}</td>
+            <td>{ACTIONS[r.action] || r.action}</td><td className="mono">{r.target}</td><td className="hint">{r.detail}</td><td className="mono hint">{r.ip}</td></tr>))}
+          {!rows.length && <tr><td colSpan={6} className="hint">Nothing yet.</td></tr>}</tbody></table>)}
   </>);
 }

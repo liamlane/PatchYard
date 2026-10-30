@@ -240,12 +240,16 @@ export function StateChip({ ok, warn, children, title }) {
   return <span className={`schip ${ok ? "s-ok" : warn ? "s-warn" : "s-bad"}`} title={title}>{children}</span>;
 }
 
+// Polls while the tab is visible; a hidden tab stops polling and catches up when it's shown again
+// (a shared server with many open tabs would otherwise answer thousands of idle requests).
 export function useInterval(fn, ms, deps = []) {
   const f = useRef(fn); f.current = fn;
   useEffect(() => {
     if (!ms) return;
     f.current();
-    const t = setInterval(() => f.current(), ms);
-    return () => clearInterval(t);
+    const t = setInterval(() => { if (!document.hidden) f.current(); }, ms);
+    const vis = () => { if (!document.hidden) f.current(); };
+    document.addEventListener("visibilitychange", vis);
+    return () => { clearInterval(t); document.removeEventListener("visibilitychange", vis); };
   }, [ms, ...deps]); // eslint-disable-line
 }
