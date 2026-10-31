@@ -8,6 +8,7 @@ async function req(method, url, body) {
   let data;
   try { data = text ? JSON.parse(text) : {}; } catch { data = { detail: text }; }
   if (r.status === 401 && !url.startsWith("/api/auth/")) window.dispatchEvent(new Event("netlab-auth"));
+  if (r.status === 403 && String(data.detail || "").startsWith("2fa-setup-required")) window.dispatchEvent(new Event("netlab-2fa"));
   if (!r.ok) { const e = new Error(data.detail || `${r.status} ${r.statusText}`); e.status = r.status; throw e; }
   return data;
 }
@@ -74,6 +75,15 @@ export const api = {
   adminUserCreate: (body) => req("POST", "/api/admin/users", body),
   adminUserPatch: (n, body) => req("PATCH", `/api/admin/users/${n}`, body),
   adminUserDelete: (n, labs) => req("DELETE", `/api/admin/users/${n}${labs ? "?delete_labs=true" : ""}`),
+  twofaSetup: () => req("POST", "/api/auth/2fa/setup"),
+  twofaEnable: (code) => req("POST", "/api/auth/2fa/enable", { code }),
+  twofaDisable: (password) => req("POST", "/api/auth/2fa/disable", { password }),
+  twofaRecovery: (password) => req("POST", "/api/auth/2fa/recovery", { password }),
+  twofaLogin: (ticket, code) => req("POST", "/api/auth/2fa/login", { ticket, code }),
+  ntfyTest: () => req("POST", "/api/auth/ntfy/test"),
+  adminChannelTest: (id) => req("POST", "/api/admin/channels/test", { id }),
+  adminChannelStatus: () => req("GET", "/api/admin/channels/status"),
+  challengeLeaderboard: (kind, id) => req("GET", `/api/challenges/${kind}/${id}/leaderboard`),
   forgot: (login) => req("POST", "/api/auth/forgot", { login }),
   resetCheck: (t) => req("GET", `/api/auth/reset/${encodeURIComponent(t)}`),
   resetDo: (t, password) => req("POST", `/api/auth/reset/${encodeURIComponent(t)}`, { password }),

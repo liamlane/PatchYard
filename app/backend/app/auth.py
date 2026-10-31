@@ -12,6 +12,7 @@ Admin-only: settings changes, importing from a host path, /api/admin/*.
 No users at all (fresh install with --no-login, or tests) = open single-user mode where
 everyone is "admin". Locked out:
   docker exec patchyard python -m app.auth reset-password admin    (prints a new password)
+  docker exec patchyard python -m app.auth reset-2fa admin         (removes two-factor sign-in)
   docker exec -i patchyard python -m app.auth create-admin NAME    (reads the password from stdin)
 """
 import base64, contextvars, hashlib, hmac, json, os, re, secrets, sys, time
@@ -93,6 +94,43 @@ def session_user(tok: str | None) -> dict | None:
     if not u or u.get("disabled") or str(u.get("gen", 1)) != gen:
         return None
     return {"name": name, "role": u.get("role", "user")}
+
+
+def make_ticket(name: str) -> str:
+    """Proof that the password was right, waiting for the second factor (5 minutes; never a session)."""
+    exp = int(time.time() + 300)
+    gen = users.session_gen(name) or 0
+    msg = f"2fa.{name}.{exp}.{gen}"
+    return f"{msg}.{_sig(msg)}"
+
+
+def ticket_user(tok: str | None) -> str | None:
+    if not tok or tok.count(".") != 4 or not tok.startswith("2fa."):
+        return None
+    _, name, exp, gen, sig = tok.split(".")
+    if not hmac.compare_digest(sig, _sig(f"2fa.{name}.{exp}.{gen}")) or not exp.isdigit() or int(exp) < time.time():
+        return None
+    if str(users.session_gen(name)) != gen:
+        return None
+    return name
+
+
+def policy_2fa() -> str:
+    p = settings.get("security.require_2fa", "auto")
+    if p == "auto":
+        from . import sandbox
+        return "admins" if sandbox.enabled() else "off"
+    return p
+
+
+def must_setup_2fa(who: dict | None) -> bool:
+    """Signed in, but the server requires two-factor sign-in for this user and they haven't set it up."""
+    if not who or not enabled():
+        return False
+    p = policy_2fa()
+    if p == "off" or (p == "admins" and who.get("role") != "admin"):
+        return False
+    return not users.has_2fa(who["name"])
 
 
 def valid_session(tok: str | None) -> bool:
@@ -221,6 +259,8 @@ class AuthMiddleware:
             who = {"name": first_admin(), "role": "admin"}
         token = CURRENT.set(who)
         try:
+            if who and not path.startswith("/api/auth/") and path != "/api/version" and must_setup_2fa(who):
+                return await self._deny(scope, send, 403, "2fa-setup-required: set up two-factor sign-in first")
             if who and who["role"] != "admin":
                 for m, pre in ADMIN_ONLY:
                     if (m == "*" or m == method) and (path == pre or (pre.endswith("/") and path.startswith(pre))):
@@ -268,9 +308,17 @@ if __name__ == "__main__" and len(sys.argv) > 1:
             else:
                 users.create("admin", _readpw(), role="admin")
             print("Patchyard login is on with the new password.")
+        elif cmd == "reset-2fa":                # lost phone and recovery codes
+            name = sys.argv[2] if len(sys.argv) > 2 else first_admin()
+            if not users.get(name):
+                raise SystemExit(f"no user {name}")
+            users.totp_disable(name)
+            from . import audit
+            audit.record("2fa.reset", name, "from the host shell", who="host")
+            print(f"Two-factor sign-in removed for {name}; they can sign in with their password and set it up again.")
         elif cmd == "list":
             for n, u in users.all_users().items():
-                print(f"{n:24} {u.get('role'):6} {'disabled' if u.get('disabled') else ''}")
+                print(f"{n:24} {u.get('role'):6} {'2fa' if (u.get('totp') or {}).get('secret') else '   '} {'disabled' if u.get('disabled') else ''}")
         else:
             raise SystemExit(f"unknown command {cmd}")
     except users.UserError as e:

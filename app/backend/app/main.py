@@ -7,7 +7,7 @@ from fastapi import FastAPI, HTTPException, WebSocket, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from . import labs, devices, metrics, monitor, impair, labmgmt, templates, settings, alerts, live, traffic, auth, hardware, reach, cfgstate, l3, system, users, sandbox, proxy
-from . import mailer, audit, challenges, notify
+from . import mailer, audit, challenges, notify, channels
 from .version import VERSION, COMMIT
 from .capture import capture_for
 from .console import console
@@ -51,6 +51,7 @@ async def lifespan(_app):
         tasks.append(asyncio.create_task(_restore_l3()))
         tasks.append(asyncio.create_task(notify.alert_digest_loop()))
         tasks.append(asyncio.create_task(notify.disk_watch_loop()))
+        tasks.append(asyncio.create_task(channels.loop()))
         await proxy.start()
         fw = await sandbox.refresh_firewall()
         if fw:
@@ -719,11 +720,15 @@ async def api_auth_state(request: Request):
     who = auth.session_user(request.cookies.get(auth.COOKIE)) if auth.enabled() else auth.current()
     if who:
         u = users.get(who["name"]) or {}
-        who = {**who, "full_name": u.get("full_name", ""), "email": u.get("email", ""), "alert_email": bool(u.get("alert_email"))}
+        who = {**who, "full_name": u.get("full_name", ""), "email": u.get("email", ""), "alert_email": bool(u.get("alert_email")),
+               "two_factor": bool((u.get("totp") or {}).get("secret")), "recovery_left": len(u.get("recovery") or []),
+               "ntfy_topic": u.get("ntfy_topic", ""), "must_setup_2fa": auth.must_setup_2fa(who),
+               "two_factor_required": auth.policy_2fa() == "everyone" or (auth.policy_2fa() == "admins" and who.get("role") == "admin")}
     return {"enabled": auth.enabled(), "logged_in": who is not None, "user": who,
             "multi_user": len(users.all_users()) > 1, "sandbox": sandbox.enabled(),
             "requests": auth.enabled() and bool(settings.get("users.allow_requests", True)),
-            "forgot": auth.enabled() and notify.resets_possible(), "mail": mailer.enabled()}
+            "forgot": auth.enabled() and notify.resets_possible(), "mail": mailer.enabled(), "require_2fa": auth.policy_2fa(),
+            "user_ntfy": bool(settings.get("channels.user_ntfy")), "ntfy_server": settings.get("channels.ntfy_server")}
 
 
 def _set_cookie(resp: JSONResponse, request: Request, name: str):
@@ -755,9 +760,82 @@ async def api_login(body: dict, request: Request):
         if st == "declined":
             raise HTTPException(403, "your account request was declined")
         raise HTTPException(401, "wrong username or password")
+    if users.has_2fa(name):                     # password right: now the code from the app
+        return {"ok": False, "two_factor": True, "ticket": auth.make_ticket(name)}
     users.touch_login(name)
     audit.record("login", name, who=name, ip=ip)
     return _set_cookie(JSONResponse({"ok": True, "user": {"name": name, "role": u.get("role", "user")}}), request, name)
+
+
+@app.post("/api/auth/2fa/login")
+async def api_2fa_login(body: dict, request: Request):
+    ip = _client_ip(request)
+    name = auth.ticket_user(str(body.get("ticket") or ""))
+    if not name:
+        raise HTTPException(401, "that took too long: sign in again")
+    if auth.throttled(f"2fa:{name}", limit=6) or auth.throttled(f"ip:{ip}", limit=20):
+        raise HTTPException(429, "too many wrong codes: wait 15 minutes")
+    how = await asyncio.to_thread(users.totp_verify, name, str(body.get("code") or ""))
+    if not how:
+        auth.failed(f"2fa:{name}", f"ip:{ip}")
+        audit.record("2fa.fail", name, who="", ip=ip)
+        await asyncio.sleep(0.5)
+        raise HTTPException(401, "wrong code")
+    users.touch_login(name)
+    u = users.get(name) or {}
+    audit.record("login", name, "with a recovery code" if how == "recovery" else "with two-factor", who=name, ip=ip)
+    left = len(u.get("recovery") or [])
+    return _set_cookie(JSONResponse({"ok": True, "user": {"name": name, "role": u.get("role", "user")},
+                                     "recovery_left": left if how == "recovery" else None}), request, name)
+
+
+def _me_or_401() -> str:
+    who = auth.signed_in()
+    if not who or not users.get(who["name"]):
+        raise HTTPException(401, "login required")
+    return who["name"]
+
+
+@app.post("/api/auth/2fa/setup")
+async def api_2fa_setup():
+    me = _me_or_401()
+    sec = users.totp_setup(me)
+    label = me + (f"@{mailer.site_url().split('://')[-1]}" if mailer.site_url() else "")
+    from . import totp
+    return {"secret": sec, "uri": totp.uri(sec, label)}
+
+
+@app.post("/api/auth/2fa/enable")
+async def api_2fa_enable(body: dict):
+    me = _me_or_401()
+    codes = users.totp_enable(me, str(body.get("code") or ""))
+    audit.record("2fa.enable", me)
+    notify.security_notice(me, "Two-factor sign-in turned on", "Two-factor sign-in is now on for your Patchyard account.")
+    return {"ok": True, "recovery_codes": codes}
+
+
+@app.post("/api/auth/2fa/disable")
+async def api_2fa_disable(body: dict, request: Request):
+    me = _me_or_401()
+    pol = auth.policy_2fa()
+    if pol == "everyone" or (pol == "admins" and (users.get(me) or {}).get("role") == "admin"):
+        raise HTTPException(403, "this server requires two-factor sign-in for your account")
+    if not await asyncio.to_thread(users.verify, me, str(body.get("password", ""))):
+        raise HTTPException(403, "password is wrong")
+    users.totp_disable(me)
+    audit.record("2fa.disable", me, ip=_client_ip(request))
+    notify.security_notice(me, "Two-factor sign-in turned off", "Two-factor sign-in was turned off for your Patchyard account. If that wasn't you, reset your password and tell the admin.")
+    return _set_cookie(JSONResponse({"ok": True}), request, me)
+
+
+@app.post("/api/auth/2fa/recovery")
+async def api_2fa_recovery(body: dict):
+    me = _me_or_401()
+    if not await asyncio.to_thread(users.verify, me, str(body.get("password", ""))):
+        raise HTTPException(403, "password is wrong")
+    codes = users.new_recovery_codes(me)
+    audit.record("2fa.recovery_codes", me)
+    return {"recovery_codes": codes}
 
 
 @app.post("/api/auth/logout")
@@ -790,8 +868,10 @@ async def api_profile(body: dict):
     who = auth.signed_in()
     if not who or not users.get(who["name"]):
         raise HTTPException(401, "login required")
-    u = users.update(who["name"], **{k: body[k] for k in ("full_name", "email", "alert_email") if k in body})
-    return {"ok": True, "full_name": u["full_name"], "email": u["email"], "alert_email": u["alert_email"]}
+    if "ntfy_topic" in body and not settings.get("channels.user_ntfy"):
+        raise HTTPException(403, "phone notifications aren't turned on for users on this server")
+    u = users.update(who["name"], **{k: body[k] for k in ("full_name", "email", "alert_email", "ntfy_topic") if k in body})
+    return {"ok": True, "full_name": u["full_name"], "email": u["email"], "alert_email": u["alert_email"], "ntfy_topic": u["ntfy_topic"]}
 
 
 @app.post("/api/auth/forgot")
@@ -830,6 +910,8 @@ async def api_reset(token: str, body: dict, request: Request):
         auth.failed(f"reset:{ip}")
         raise
     audit.record("password.reset", name, who=name, ip=ip)
+    if users.has_2fa(name):              # a reset link alone must not get past two-factor
+        return {"ok": True, "sign_in": True}
     users.touch_login(name)
     u = users.get(name) or {}
     return _set_cookie(JSONResponse({"ok": True, "user": {"name": name, "role": u.get("role", "user")}}), request, name)
@@ -907,6 +989,10 @@ async def api_admin_user_create(body: dict):
 @app.patch("/api/admin/users/{name}")
 async def api_admin_user_update(name: str, body: dict):
     kw = {k: body[k] for k in ("role", "disabled", "internet", "quota", "full_name", "email") if k in body}
+    if body.get("reset_2fa"):
+        users.totp_disable(name)
+        audit.record("2fa.reset", name)
+        notify.security_notice(name, "Two-factor sign-in removed", "An admin removed two-factor sign-in from your Patchyard account (for example after a lost phone). Set it up again under Account and password.")
     if name == auth.current()["name"] and (kw.get("disabled") or kw.get("role") == "user"):
         raise HTTPException(400, "you can't disable or demote yourself")
     u = users.update(name, **kw)
@@ -1037,6 +1123,33 @@ async def api_admin_email_test(body: dict):
     return {"ok": ok, "error": err, "settings": settings.public()["email"]}
 
 
+@app.post("/api/admin/channels/test")
+async def api_admin_channel_test(body: dict):
+    """Send a test message through a saved channel."""
+    ch = next((c for c in settings.get("channels.items", []) if c["id"] == body.get("id")), None)
+    if not ch:
+        raise HTTPException(404, "save the channel first")
+    ok, msg = await channels.test(ch)
+    audit.record("channel.test", ch["name"], "ok" if ok else msg)
+    return {"ok": ok, "error": "" if ok else msg}
+
+
+@app.get("/api/admin/channels/status")
+async def api_admin_channel_status():
+    return channels.STATUS
+
+
+@app.post("/api/auth/ntfy/test")
+async def api_ntfy_test():
+    """Send a test notification to your own ntfy topic."""
+    me = _me_or_401()
+    u = users.get(me) or {}
+    if not settings.get("channels.user_ntfy") or not u.get("ntfy_topic"):
+        raise HTTPException(400, "set your ntfy topic first")
+    ok, msg = await channels.test({"id": f"user:{me}", "name": "phone", "type": "ntfy", "url": u["ntfy_topic"]})
+    return {"ok": ok, "error": "" if ok else msg}
+
+
 @app.get("/api/admin/audit")
 async def api_admin_audit(who: str = "", q: str = "", limit: int = 500):
     return await asyncio.to_thread(audit.tail, max(1, min(limit, 5000)), who.strip().lower(), q.strip()[:100])
@@ -1045,7 +1158,9 @@ async def api_admin_audit(who: str = "", q: str = "", limit: int = 500):
 # ---------------- challenges ----------------
 @app.get("/api/challenges")
 async def api_challenges():
-    return {"builtin": challenges.list_builtin(), "published": challenges.list_published(),
+    lb = settings.get("challenges.leaderboard", True)
+    return {"builtin": challenges.list_builtin(), "published": challenges.list_published(), "leaderboard": lb,
+            "scores": challenges.summary(auth.current()["name"]) if lb else {},
             "types": challenges.TYPES, "services": list(challenges.SERVICES), "protocols": list(challenges.PROTOCOLS)}
 
 
@@ -1072,6 +1187,15 @@ async def api_challenge_start(kind: str, cid: str, body: dict):
         raise
     audit.record("challenge.start", d["name"], f"{kind}/{cid}")
     return d
+
+
+@app.get("/api/challenges/{kind}/{cid}/leaderboard")
+async def api_challenge_leaderboard(kind: str, cid: str):
+    if not settings.get("challenges.leaderboard", True) and not auth.is_admin():
+        raise HTTPException(404, "the leaderboard is turned off on this server")
+    if kind not in ("builtin", "published"):
+        raise HTTPException(404, "no such challenge")
+    return challenges.leaderboard(f"{kind}/{cid}")
 
 
 @app.post("/api/labs/{lab}/challenge/check")

@@ -33,6 +33,8 @@ SERVICES = ("dhcp", "dns", "http", "ftp", "tftp", "syslog", "ntp")
 PROTOCOLS = ("any", "connected", "static", "ospf", "bgp")
 MAX_CHECKS = 100
 DIR = settings.FILE.parent / "challenges"
+SCORES = settings.FILE.parent / "challenge-scores.json"
+ORIGIN_RE = re.compile(r"^(builtin|published)/[\w-]{1,40}$")
 RESULT = "challenge-result.json"
 
 
@@ -50,6 +52,12 @@ def normalise(c: dict | None, node_ids: set[str]) -> dict | None:
         return None
     out = {"title": _s(c.get("title"), 120) or "Challenge", "instructions": str(c.get("instructions") or "")[:20000],
            "feedback": c.get("feedback") if c.get("feedback") in ("full", "labels", "score") else "full", "checks": []}
+    if ORIGIN_RE.match(str(c.get("origin") or "")):        # where it came from, for the leaderboard
+        out["origin"] = c["origin"]
+        try:
+            out["started"] = float(c.get("started") or 0) or None
+        except (TypeError, ValueError):
+            out["started"] = None
     seen = set()
     for i, k in enumerate((c.get("checks") or [])[:MAX_CHECKS]):
         t = k.get("type")
@@ -267,7 +275,86 @@ async def check(lab: dict) -> dict:
         p.write_text(json.dumps(res))
     except OSError:
         pass
+    try:
+        res["leaderboard"] = _record(lab, res)
+    except Exception:  # noqa: BLE001 - the score itself already counted
+        pass
     return res
+
+
+# ------------------------------------------------------------------ leaderboard
+
+def checks_key(checks: list[dict]) -> str:
+    """Fingerprint of what a challenge checks (not how it's worded), so an edited copy can't post scores."""
+    import hashlib
+    core = [{k: v for k, v in sorted(c.items()) if k not in ("id", "label")} for c in checks]
+    return hashlib.sha256(json.dumps(core, sort_keys=True).encode()).hexdigest()[:24]
+
+
+def expected_key(origin: str) -> str | None:
+    kind, _, cid = origin.partition("/")
+    if kind == "builtin" and cid in BUILTIN:
+        return checks_key(normalise({"checks": BUILTIN[cid]["checks"]}, set())["checks"])
+    if kind == "published":
+        try:
+            return json.loads(_meta_path(cid).read_text()).get("checks_key")
+        except (OSError, ValueError, FileNotFoundError):
+            return None
+    return None
+
+
+def _scores() -> dict:
+    try:
+        return json.loads(SCORES.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def _record(lab: dict, res: dict) -> bool:
+    """Count this check towards the server leaderboard, if the lab is an unedited copy of a built-in or published challenge."""
+    ch = lab.get("challenge") or {}
+    origin = ch.get("origin")
+    if not origin or not settings.get("challenges.leaderboard", True):
+        return False
+    if checks_key(ch.get("checks") or []) != expected_key(origin):
+        return False
+    from . import auth
+    owner = lab.get("owner") or auth.first_admin()
+    d = _scores()
+    row = d.setdefault(origin, {}).setdefault(owner, {"best": 0, "attempts": 0})
+    row["attempts"] += 1
+    row["last"] = res["ts"]
+    row["best"] = max(row["best"], res["pct"])
+    if ch.get("started") and not row.get("started"):
+        row["started"] = ch["started"]
+    if res["pct"] == 100 and not row.get("completed"):
+        row["completed"] = res["ts"]
+        if row.get("started"):
+            row["minutes"] = round((res["ts"] - row["started"]) / 60, 1)
+    tmp = SCORES.with_suffix(".tmp")
+    SCORES.parent.mkdir(parents=True, exist_ok=True)
+    tmp.write_text(json.dumps(d))
+    tmp.replace(SCORES)
+    return True
+
+
+def leaderboard(origin: str) -> list[dict]:
+    from . import users
+    rows = []
+    for n, r in _scores().get(origin, {}).items():
+        if users.any_users() and not users.get(n):      # deleted accounts drop off
+            continue
+        rows.append({"user": n, **{k: r.get(k) for k in ("best", "attempts", "completed", "minutes", "last")}})
+    return sorted(rows, key=lambda r: (not r.get("completed"), r.get("minutes") or 1e9, -(r.get("best") or 0), r.get("last") or 0))
+
+
+def summary(me: str) -> dict:
+    """{origin: {"completed": n, "players": n, "mine": best or None}} for the challenge cards."""
+    out = {}
+    for origin, rows in _scores().items():
+        out[origin] = {"completed": sum(1 for r in rows.values() if r.get("completed")), "players": len(rows),
+                       "mine": (rows.get(me) or {}).get("best"), "mine_done": bool((rows.get(me) or {}).get("completed"))}
+    return out
 
 
 def last_result(lab: dict) -> dict | None:
@@ -332,6 +419,106 @@ BUILTIN = {
 }
 
 
+def _strip_bgp(text: str) -> str:
+    return re.sub(r"router bgp \d+\n.*?\nexit\n!\n", "", text, flags=re.S)
+
+
+def _vlan_mutate(nodes, links, files, ann):
+    for n in nodes:
+        if n["id"] == "sw1":
+            p = n["props"]
+            p["vlans"] = [{"id": 1, "name": "default"}]
+            p["ports"] = {}
+            p.pop("svi", None)
+    ann[:] = [a for a in ann if a["id"] == "ann-note"]
+    ann[0]["text"] = "Challenge: open the Challenge panel (flag button, top right) for the instructions."
+
+
+def _nat_mutate(nodes, links, files, ann):
+    for n in nodes:
+        if n["id"] == "r1":
+            for k in ("acls", "ifcfg", "nat"):
+                n["props"].pop(k, None)
+    for a in ann:
+        if a["id"] == "ann-note":
+            a["text"] = "Challenge: open the Challenge panel (flag button, top right) for the instructions."
+
+
+def _bgp_mutate(nodes, links, files, ann):
+    files["r4"] = _strip_bgp(files["r4"])
+    for a in ann:
+        if a["id"] == "ann-note":
+            a["text"] = "Challenge: open the Challenge panel (flag button, top right) for the instructions."
+
+
+BUILTIN.update({
+    "vlan-fix": {
+        "title": "VLANs and a trunk for router-on-a-stick", "level": "Beginner", "template": "router-on-a-stick",
+        "desc": "sw1 was reset to factory defaults. Rebuild its VLANs, access ports and the trunk to r1 so the two PCs can reach each other through r1.",
+        "instructions": (
+            "Someone wiped sw1. r1 is still set up for router-on-a-stick: subinterfaces for VLAN 10 (192.168.110.1) and VLAN 20 (192.168.120.1) on its link to sw1.\n\n"
+            "Your job, on sw1:\n"
+            "- Create VLAN 10 named **USERS** and VLAN 20 named **SERVERS**.\n"
+            "- Put pc1's port in VLAN 10 and pc2's port in VLAN 20.\n"
+            "- Make the port to r1 an 802.1Q trunk carrying VLANs 10 and 20.\n\n"
+            "Deploy, then use sw1's CLI tab (`vlan 10`, `switchport mode access`, `switchport mode trunk`…) or its Config tab. "
+            "When pc1 can ping pc2 (192.168.120.10), press Check."),
+        "checks": [
+            {"type": "ios_show", "node": "sw1", "command": "show vlan brief", "match": "(?m)^10\\s+USERS\\b", "regex": True, "label": "VLAN 10 USERS exists", "points": 1},
+            {"type": "ios_show", "node": "sw1", "command": "show vlan brief", "match": "(?m)^20\\s+SERVERS\\b", "regex": True, "label": "VLAN 20 SERVERS exists", "points": 1},
+            {"type": "ios_show", "node": "sw1", "command": "show interfaces trunk", "match": "trunking", "label": "sw1 has a trunk", "points": 2},
+            {"type": "ping", "node": "pc1", "target": "192.168.110.1", "label": "pc1 reaches its gateway on VLAN 10", "points": 2},
+            {"type": "ping", "node": "pc2", "target": "192.168.120.1", "label": "pc2 reaches its gateway on VLAN 20", "points": 2},
+            {"type": "ping", "node": "pc1", "target": "192.168.120.10", "label": "pc1 reaches pc2 through r1", "points": 2},
+        ],
+        "mutate": _vlan_mutate,
+    },
+    "nat-edge": {
+        "title": "Branch edge: PAT, a published server and an ACL", "level": "Intermediate", "template": "nat-acl-edge",
+        "desc": "r1 has addresses and a default route but no NAT or ACLs. Get the branch online, publish its web server, and lock the outside down.",
+        "instructions": (
+            "r1 is the branch's edge router: Gi0/0/0 (eth1) faces the ISP as 203.0.113.2/30, Gi0/0/1 (eth2) is the LAN 192.168.1.0/24. "
+            "It has a default route, but nothing else.\n\n"
+            "Your job, on r1:\n"
+            "- **PAT**: let the LAN out to the internet behind r1's outside address (a standard ACL for 192.168.1.0/24, `ip nat inside`/`outside`, `overload`).\n"
+            "- **Static NAT**: publish web1 (192.168.1.20) on r1's outside address, TCP port 80.\n"
+            "- **ACL**: an extended ACL inbound on the outside interface that lets in the web server, return traffic and DNS replies, "
+            "and nothing else: the internet must not be able to ping r1.\n\n"
+            "Test from pc1's Web Browser (http://www.example.net) and from inet's (http://203.0.113.2). `show ip nat translations` and "
+            "`show access-lists` on r1 help."),
+        "checks": [
+            {"type": "ios_show", "node": "r1", "command": "show running-config", "match": "overload", "label": "r1 has PAT (overload)", "points": 1},
+            {"type": "http", "node": "pc1", "url": "http://www.example.net", "match": "internet web server", "label": "pc1 browses the internet through PAT", "points": 2},
+            {"type": "ping", "node": "pc2", "target": "198.51.100.10", "label": "pc2 can ping the internet server", "points": 1},
+            {"type": "http", "node": "inet", "url": "http://203.0.113.2", "match": "Branch web server", "label": "the internet reaches web1 on r1's outside address", "points": 2},
+            {"type": "ios_show", "node": "r1", "command": "show running-config", "match": "ip access-group \\S+ in", "regex": True, "label": "r1 has an inbound ACL applied", "points": 1},
+            {"type": "ping", "node": "inet", "target": "203.0.113.2", "expect": "blocked", "label": "the internet can't ping r1", "points": 2},
+        ],
+        "mutate": _nat_mutate,
+    },
+    "bgp-peer": {
+        "title": "Bring AS65003 online", "level": "Intermediate", "template": "bgp-multi-as",
+        "desc": "r4 (AS65003) lost its BGP configuration. Peer it with both neighbouring ASes and advertise its networks so pc1 can reach srv1.",
+        "instructions": (
+            "r4 is AS65003's only router. Its interfaces are addressed, but its BGP configuration was lost.\n\n"
+            "Your job, on r4:\n"
+            "- Run BGP AS **65003** with router ID 10.255.3.4.\n"
+            "- Peer with r2 (172.16.24.1, AS65001) and r3 (172.16.34.1, AS65002).\n"
+            "- Advertise the server LAN 192.168.4.0/24 and the loopback 10.255.3.4/32.\n\n"
+            "FRR won't exchange eBGP routes without a policy unless you add `no bgp ebgp-requires-policy` under the BGP process. "
+            "`show ip bgp summary` on r4 and `show ip route` on r1 help. Press Check when pc1 can open http://www.as65003.lab."),
+        "checks": [
+            {"type": "bgp_up", "node": "r4", "count": 2, "points": 3},
+            {"type": "route", "node": "r1", "prefix": "192.168.4.0/24", "protocol": "bgp", "points": 2},
+            {"type": "route", "node": "r4", "prefix": "192.168.1.0/24", "protocol": "bgp", "points": 1},
+            {"type": "ping", "node": "pc1", "target": "192.168.4.10", "points": 2},
+            {"type": "http", "node": "pc1", "url": "http://www.as65003.lab", "match": "AS65003", "points": 2},
+        ],
+        "mutate": _bgp_mutate,
+    },
+})
+
+
 def list_builtin() -> list[dict]:
     from . import templates
     return [{"id": k, "kind": "builtin", "title": v["title"], "desc": v["desc"], "level": v["level"],
@@ -350,7 +537,8 @@ def start_builtin(cid: str, name: str) -> dict:
     b["mutate"](nodes, links, files, ann)
     lab = {"name": name, "mgmt_network": labs._d("mgmt_network"), "mgmt_subnet": labs._d("mgmt_subnet"),
            "nodes": nodes, "links": links, "annotations": ann, "template": b["template"],
-           "challenge": {"title": b["title"], "instructions": b["instructions"], "feedback": "full", "checks": b["checks"]}}
+           "challenge": {"title": b["title"], "instructions": b["instructions"], "feedback": "full", "checks": b["checks"],
+                         "origin": f"builtin/{cid}", "started": time.time()}}
     for r, txt in files.items():
         labs.write_inplace(labs.lab_dir(name) / "configs" / r / "frr.conf", txt)
     labs.save(lab)
@@ -383,9 +571,11 @@ def publish(lab: dict, by: str, desc: str = "", level: str = "") -> dict:
     cid = secrets.token_hex(6)
     DIR.mkdir(parents=True, exist_ok=True)
     clean = {k: v for k, v in lab.items() if k not in ("owner", "trusted", "sandbox_subnet", "workdir")}
+    clean["challenge"] = {k: v for k, v in ch.items() if k not in ("origin", "started")}
     (DIR / f"{cid}.zip").write_bytes(labmgmt.export_zip(clean))
     meta = {"id": cid, "title": ch.get("title") or lab["name"], "desc": _s(desc, 400), "level": _s(level, 30), "by": by,
-            "created": time.time(), "devices": len(lab.get("nodes", [])), "checks": len(ch["checks"]), "from_lab": lab["name"]}
+            "created": time.time(), "devices": len(lab.get("nodes", [])), "checks": len(ch["checks"]), "from_lab": lab["name"],
+            "checks_key": checks_key(normalise(ch, set())["checks"])}
     (DIR / f"{cid}.json").write_text(json.dumps(meta))
     return meta
 
@@ -401,4 +591,7 @@ def start_published(cid: str, name: str) -> dict:
     m = _meta_path(cid)
     if not m.exists():
         raise FileNotFoundError("no such challenge")
-    return labmgmt.import_zip(name, m.with_suffix(".zip").read_bytes())
+    d = labmgmt.import_zip(name, m.with_suffix(".zip").read_bytes())
+    d["challenge"] = {**(d.get("challenge") or {}), "origin": f"published/{cid}", "started": time.time()}
+    labs.save(d)
+    return labs.load(name)

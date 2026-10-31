@@ -157,16 +157,17 @@ def _apply(conds):
             cur = c.execute("INSERT INTO alerts(key, rule_id, rule, severity, lab, node, subject, message, state, started) VALUES (?,?,?,?,?,?,?,?,?,?)",
                             (key, r["id"], r["name"], r["severity"], lab, node, subject, msg, "firing", now))
             ACTIVE[key] = cur.lastrowid
-            _event("fired", {"id": cur.lastrowid, "rule": r["name"], "severity": r["severity"], "lab": lab, "node": node, "message": msg})
+            _event("fired", {"id": cur.lastrowid, "rule": r["name"], "rule_id": r["id"], "severity": r["severity"], "lab": lab, "node": node, "message": msg})
         for key in [k for k in PENDING if k not in seen]:
             del PENDING[key]
         for key in [k for k in ACTIVE if k not in seen]:
             c = c or _db()
             aid = ACTIVE.pop(key)
             c.execute("UPDATE alerts SET state='resolved', resolved=? WHERE id=?", (now, aid))
-            row = c.execute("SELECT rule, severity, lab, node, message FROM alerts WHERE id=?", (aid,)).fetchone()
+            row = c.execute("SELECT rule, severity, lab, node, message, rule_id, started FROM alerts WHERE id=?", (aid,)).fetchone()
             if row:
-                _event("resolved", {"id": aid, "rule": row[0], "severity": row[1], "lab": row[2], "node": row[3], "message": row[4]})
+                _event("resolved", {"id": aid, "rule": row[0], "severity": row[1], "lab": row[2], "node": row[3], "message": row[4],
+                                    "rule_id": row[5], "duration": round(now - (row[6] or now))})
         if c:
             c.commit()
     finally:

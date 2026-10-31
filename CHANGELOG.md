@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.14.0
+- **Two-factor sign-in** (TOTP, the codes authenticator apps show): set up from Settings → Account with a QR code, ten single-use recovery codes, new codes on demand. Sign-in asks for the code after the password; a code can't be reused and wrong codes are rate-limited. Admins choose who must use it (Admin → Limits & sandbox → Sign-in: automatic = admins on a public server, admins, everyone, or off); anyone who must and hasn't is taken to the setup page and can't use anything else until it's done. Admins can remove it for a lost phone (Users → Remove 2FA, or `python -m app.auth reset-2fa NAME`). A password-reset link no longer signs straight in when 2FA is on. Changes are emailed to the user and recorded in the audit log.
+- **Alert channels** (Admin → Alert channels): ntfy phone push, Microsoft Teams (Workflows webhooks, Adaptive Card), Slack and generic JSON webhooks. Per channel: minimum severity, lab filter, resolved messages, quiet hours (critical can break through), write-only token, **Send test** and last-delivery status. Alert rules can send to one channel or the bell only. At most 20 messages per channel in 10 minutes, then one "held back" note. Users can get their own labs' alerts on their phone with an ntfy topic, when an admin allows it.
+- **Three new built-in challenges:** *VLANs and a trunk for router-on-a-stick*, *Branch edge: PAT, a published server and an ACL*, *Bring AS65003 online* (eBGP).
+- **Challenge leaderboard:** each built-in and published challenge shows how many finished, your best, and a leaderboard (best score, time from Start to first 100%, checks run). Only unedited copies count (the checks are fingerprinted). Admins can turn it off.
+
 ## 0.13.0
 - **Email (SMTP)** in Admin → Email: provider presets, write-only password, "Send test email", and a status that only says *Working* once a test was delivered with the current settings. Emails:
   - new account requests to admins (with Reply-To the requester);

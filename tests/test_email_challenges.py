@@ -48,7 +48,7 @@ def smtp():
     srv.shutdown()
 
 
-def _wait(box, n, t=5):
+def _wait(box, n, t=15):
     end = time.time() + t
     while len(box) < n and time.time() < end:
         time.sleep(0.05)
@@ -157,7 +157,7 @@ def test_challenge_normalise_and_builtin(client):
     assert "cannot ping 8.8.8.8" in challenges.describe(c["checks"][1])
     # the built-ins start from their templates with the task left undone
     ids = {x["id"] for x in client.get("/api/challenges").json()["builtin"]}
-    assert ids == {"ospf-finish", "office-dhcp"}
+    assert ids == {"ospf-finish", "office-dhcp", "vlan-fix", "nat-edge", "bgp-peer"}
     d = client.post("/api/challenges/builtin/ospf-finish/start", json={"name": "t-ch1"}).json()
     assert d["challenge"]["checks"] and d["owner"]
     r3 = (labs.lab_dir("t-ch1") / "configs" / "r3" / "frr.conf").read_text()

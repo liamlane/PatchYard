@@ -179,6 +179,7 @@ export function ChallengeList({ notify, onStart, close }) {
   const [d, setD] = useState(null);
   const [names, setNames] = useState({});
   const [busy, setBusy] = useState("");
+  const [board, setBoard] = useState(null);
   const load = () => api.challenges().then(setD).catch((e) => notify(e.message, null, "bad"));
   useEffect(() => { load(); }, []); // eslint-disable-line
   if (!d) return <p className="hint">Loading…</p>;
@@ -192,12 +193,19 @@ export function ChallengeList({ notify, onStart, close }) {
   };
   return (<>
     <p className="hint">Activities with instructions and a Check button that scores your running lab. Each one starts as your own copy. Make your own from any lab: open the Challenge panel (flag button) and add checks.</p>
+    {board && <Leaderboard board={board} onClose={() => setBoard(null)} />}
     <div className="tpl-grid">
       {all.map((c) => (
         <div key={`${c.kind}-${c.id}`} className="tpl">
           <h3>{c.title} <span className="hint">{c.devices} devices · {c.checks} checks</span></h3>
           <p>{c.desc}</p>
           <p className="hint">{c.level}{c.kind === "published" ? ` · published by ${c.by} ${ago(c.created)}` : " · built in"}</p>
+          {d.leaderboard && (() => {
+            const sc = d.scores?.[`${c.kind}/${c.id}`];
+            return <p className="hint lb-line">{sc ? `${sc.completed} of ${sc.players} player${sc.players === 1 ? "" : "s"} finished` : "Nobody has tried it yet"}
+              {sc?.mine != null && <b className={sc.mine_done ? "ok-t" : ""}> · you: {sc.mine_done ? "done ✓" : `${sc.mine}%`}</b>}
+              {sc && <> · <button className="link" onClick={() => setBoard(board?.key === `${c.kind}/${c.id}` ? null : { key: `${c.kind}/${c.id}`, title: c.title, kind: c.kind, id: c.id })}>leaderboard</button></>}</p>;
+          })()}
           <div className="row">
             <input placeholder={labNameFor(c.kind === "builtin" ? c.id : "challenge")} value={names[c.id] ?? ""} onChange={(e) => setNames({ ...names, [c.id]: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "") })} aria-label="New lab name" />
             <button className="primary" disabled={busy === c.id} onClick={() => start(c)}>{busy === c.id ? "Starting…" : "Start"}</button>
@@ -209,4 +217,22 @@ export function ChallengeList({ notify, onStart, close }) {
         </div>))}
     </div>
   </>);
+}
+
+function Leaderboard({ board, onClose }) {
+  const [rows, setRows] = useState(null);
+  useEffect(() => { setRows(null); api.challengeLeaderboard(board.kind, board.id).then(setRows).catch(() => setRows([])); }, [board.kind, board.id]);
+  const me = whoami()?.name;
+  return (
+    <div className="subbox leaderboard">
+      <div className="row"><h4>Leaderboard: {board.title}</h4><span className="grow" /><button className="icon-btn" onClick={onClose} aria-label="Close"><Icon name="x" /></button></div>
+      {!rows ? <p className="hint">Loading…</p> : !rows.length ? <p className="hint">No scores yet.</p> : (
+        <table className="grid compact"><thead><tr><th>#</th><th>Player</th><th>Best</th><th>Finished</th><th>Time to finish</th><th>Checks run</th></tr></thead>
+          <tbody>{rows.map((r, i) => (
+            <tr key={r.user} className={r.user === me ? "me" : ""}><td>{r.completed ? i + 1 : "–"}</td><td><b>{r.user}</b>{r.user === me && <span className="hint"> (you)</span>}</td>
+              <td>{r.best}%</td><td>{r.completed ? new Date(r.completed * 1000).toLocaleDateString() : <span className="hint">not yet</span>}</td>
+              <td>{r.minutes != null ? (r.minutes < 90 ? `${Math.round(r.minutes)} min` : `${(r.minutes / 60).toFixed(1)} h`) : "–"}</td><td>{r.attempts}</td></tr>))}</tbody></table>)}
+      <p className="hint">Only unedited copies of this challenge count. Time to finish runs from Start to the first 100%.</p>
+    </div>
+  );
 }

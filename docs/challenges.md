@@ -13,12 +13,21 @@ A challenge is a lab with instructions and a **Check** button that scores what y
 
 ![Lab manager, Challenges tab](images/screen-challenges.png)
 
-Two challenges are built in:
+Five challenges are built in:
 
-| Challenge | Starts from | Task |
-| --- | --- | --- |
-| Finish the OSPF triangle | OSPF triangle template | r3 is addressed but has no routing: bring it into area 0 with the right router ID and passive interfaces so pc1 can browse the server behind it |
-| Get the office online | Small office template | srv1's DHCP is off and its pool is gone: rebuild it so every PC gets an address, DNS and a way out through the firewall |
+| Challenge | Level | Starts from | Task |
+| --- | --- | --- | --- |
+| Finish the OSPF triangle | Beginner | OSPF triangle | r3 is addressed but has no routing: bring it into area 0 with the right router ID and passive interfaces so pc1 can browse the server behind it |
+| Get the office online | Beginner | Small office | srv1's DHCP is off and its pool is gone: rebuild it so every PC gets an address, DNS and a way out through the firewall |
+| VLANs and a trunk for router-on-a-stick | Beginner | Router-on-a-stick | sw1 was wiped: recreate VLANs 10 USERS and 20 SERVERS, the access ports and the trunk to r1 |
+| Branch edge: PAT, a published server and an ACL | Intermediate | NAT and ACLs at the edge | r1 has no NAT or ACLs: PAT the LAN out, publish web1 on port 80, and an inbound ACL that stops the internet pinging r1 |
+| Bring AS65003 online | Intermediate | BGP between three ASes | r4 lost its BGP config: peer with AS65001 and AS65002 and advertise the server LAN |
+
+## Leaderboard
+
+Built-in and published challenges keep a score per player on the server: best score, when they first reached 100%, how long that took from pressing **Start**, and how many times they pressed Check. The Challenges tab shows how many people finished each one, your own best, and the leaderboard.
+
+Only unedited copies count: Patchyard fingerprints a challenge's checks, and a copy whose checks were changed stops posting scores (editing the instructions or labels is fine). Admins can turn the leaderboard off under Admin → Limits & sandbox → Challenges.
 
 ## Make one
 

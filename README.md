@@ -122,6 +122,8 @@ A Services tab with a page per service, each with an On/Off switch and a running
   - no internet except package mirrors.
 - **HTTPS** comes from Let's Encrypt.
 - **Email:** account requests, invites, password resets and alert digests through your SMTP provider, with a test button.
+- **Two-factor sign-in** with an authenticator app and recovery codes, required for admins on a public server.
+- **Alert channels:** phone push (ntfy), Microsoft Teams, Slack and webhooks, with quiet hours.
 - **Audit log** and a **disk allowance** per user.
 
 ### Manage
@@ -139,7 +141,7 @@ A Services tab with a page per service, each with an On/Off switch and a running
   - dual-ISP MPLS L3VPN.
 - **Labs:** snapshots with diff and restore, clone, and zip export and import.
 - **Access:** an admin login.
-- **Challenges:** Packet Tracer-style activities with instructions and a Check button that scores the running lab. Two built in; make your own from any lab, share them as zips or publish them to everyone on the server ([docs/challenges.md](docs/challenges.md)).
+- **Challenges:** Packet Tracer-style activities with instructions and a Check button that scores the running lab. Five built in, with a leaderboard; make your own from any lab, share them as zips or publish them to everyone on the server ([docs/challenges.md](docs/challenges.md)).
 - **Help:** a built-in, searchable how-to guide covering every feature, with step-by-step walkthroughs.
 
 ## Screenshots

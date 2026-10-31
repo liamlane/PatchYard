@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { catalogue } from "./hw.js";
 import { api } from "./api.js";
+import { TwoFactorSection } from "./TwoFactor.jsx";
 import { Modal, Icon } from "./ui.jsx";
 
 const TABS = [["general", "General", "gear"], ["defaults", "Lab defaults", "layers"], ["monitoring", "Monitoring", "pulse"], ["alerts", "Alert rules", "flag"],
@@ -89,7 +90,7 @@ export default function Settings({ onClose, notify, labs, lab, appearance, onSav
               <span className="hint">Protocol, link and device rules wait this long after a lab comes up, so convergence doesn't alert.</span>
             </div>
             <div className="rules-wrap"><table className="grid rules">
-              <thead><tr><th>On</th><th>Name</th><th>Condition</th><th>Threshold</th><th>Lab</th><th>Device</th><th>For</th><th>Severity</th><th /></tr></thead>
+              <thead><tr><th>On</th><th>Name</th><th>Condition</th><th>Threshold</th><th>Lab</th><th>Device</th><th>For</th><th>Severity</th><th title="Alert channels (Admin → Alert channels)">Send to</th><th /></tr></thead>
               <tbody>{rules.map((r, i) => (
                 <tr key={r.id}>
                   <td><input type="checkbox" checked={r.enabled} onChange={(e) => setRule(i, "enabled", e.target.checked)} aria-label="Enabled" /></td>
@@ -102,6 +103,9 @@ export default function Settings({ onClose, notify, labs, lab, appearance, onSav
                   <td><input className="narrow2" list="set-nodes" placeholder={r.type?.startsWith("probe") ? "source" : "any"} value={r.node || ""} onChange={(e) => setRule(i, "node", e.target.value.toLowerCase())} aria-label="Device" /></td>
                   <td className="nowrap"><input className="narrow" type="number" min="0" value={r.for_s} onChange={(e) => setRule(i, "for_s", Number(e.target.value))} aria-label="For seconds" /> s</td>
                   <td><select value={r.severity} onChange={(e) => setRule(i, "severity", e.target.value)} aria-label="Severity">{(meta.severities || []).map((x) => <option key={x}>{x}</option>)}</select></td>
+                  <td><select value={(r.channels || [])[0] || ""} onChange={(e) => setRule(i, "channels", e.target.value ? [e.target.value] : [])} aria-label="Send to">
+                    <option value="">all channels</option><option value="__none__">bell only</option>
+                    {(s.channels?.items || []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></td>
                   <td><button className="link danger" onClick={() => upd("alerts", "rules", rules.filter((_, j) => j !== i))} aria-label="Delete rule"><Icon name="trash" size={14} /></button></td>
                 </tr>))}
               </tbody>
@@ -169,6 +173,12 @@ function Security({ s, notify, me }) {
           try { await api.profile({ alert_email: v }); me.alert_email = v; notify(v ? "You'll get alert emails" : "Alert emails off", null, "ok"); } catch (x) { setAlertMail(!v); notify(x.message, null, "bad"); }
         }} /></Field>
     </>}
+    {me && <>
+      <h3>Two-factor sign-in</h3>
+      <p className="hint">A code from an authenticator app on your phone, as well as your password, every time you sign in.</p>
+      <TwoFactorSection me={me} notify={notify} required={!!me.two_factor_required} />
+      <PhoneAlerts me={me} notify={notify} />
+    </>}
     <h3>Change password</h3>
     <Field label="Current password"><input type="password" value={cur} onChange={(e) => setCur(e.target.value)} autoComplete="current-password" /></Field>
     <Field label="New password" hint="at least 10 characters"><input type="password" value={pw} onChange={(e) => setPw(e.target.value)} autoComplete="new-password" /></Field>
@@ -215,5 +225,26 @@ function About({ meta }) {
     {feats.some(([, f]) => !f.ok) && <p className="hint">Load missing modules with <code>sudo modprobe NAME</code> (Ubuntu: <code>sudo apt install linux-modules-extra-$(uname -r)</code>), or re-run the installer, which does both.</p>}
     <h3>Licence</h3>
     <p className="hint">Copyright Liam Lane. Free to install and use for personal, educational and lab work; see NOTICE in the repository.</p>
+  </>);
+}
+
+function PhoneAlerts({ me, notify }) {
+  const [st, setSt] = useState(null);
+  const [topic, setTopic] = useState(me.ntfy_topic || "");
+  useEffect(() => { api.authState().then(setSt).catch(() => {}); }, []);
+  if (!st?.user_ntfy) return null;
+  const suggest = () => setTopic(`patchyard-${me.name}-${Math.random().toString(36).slice(2, 10)}`);
+  return (<>
+    <h3>Alerts on your phone</h3>
+    <p className="hint">Install the free <b>ntfy</b> app (iOS, Android), subscribe to a topic on <code>{st.ntfy_server}</code>, and enter the same topic here.
+      Warnings and critical alerts from your labs then arrive as push notifications. Anyone who knows the topic can read it, so make it hard to guess.</p>
+    <div className="formrow">
+      <label>Topic<input value={topic} placeholder="patchyard-yourname-x7k2q9" onChange={(e) => setTopic(e.target.value.trim())} /></label>
+      {!topic && <button onClick={suggest}>Suggest one</button>}
+      <button className="primary" disabled={topic === (me.ntfy_topic || "")} onClick={async () => {
+        try { await api.profile({ ntfy_topic: topic }); me.ntfy_topic = topic; notify(topic ? "Phone alerts on" : "Phone alerts off", null, "ok"); } catch (x) { notify(x.message, null, "bad"); }
+      }}>Save</button>
+      {me.ntfy_topic && <button onClick={async () => { const r = await api.ntfyTest().catch((x) => ({ error: x.message })); notify(r.ok ? "Test sent: check your phone" : `Couldn't send: ${r.error}`, null, r.ok ? "ok" : "bad"); }}>Send a test</button>}
+    </div>
   </>);
 }

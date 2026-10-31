@@ -333,7 +333,7 @@ end`}</Cmd></li>
       </Steps>
     </> },
 
-  { id: "challenges", group: "Labs", title: "Challenges", icon: "flag", kw: "challenge activity exercise check score assessment points instructor student publish",
+  { id: "challenges", group: "Labs", title: "Challenges", icon: "flag", kw: "challenge activity exercise check score assessment points instructor student publish leaderboard vlan bgp nat acl",
     body: () => <>
       <p>A challenge is a lab with instructions and a <B>Check</B> button that scores what you've built, like a Packet Tracer activity. Checks look at the running network, so only what really works counts.</p>
       <h4>Play one</h4>
@@ -358,16 +358,28 @@ end`}</Cmd></li>
         <li>Solve it yourself once and press Check to make sure it reaches 100%. Then put the lab back to its starting state (a snapshot helps).</li>
       </Steps>
       <p>The challenge is saved in the lab, so it travels with clone and export: send someone the zip and they can play it. Admins can also publish a challenge to everyone on the server from the editor.</p>
+      <h4>Built in</h4>
+      <ul>
+        <li><b>Finish the OSPF triangle</b> (beginner): bring r3 into OSPF area 0.</li>
+        <li><b>Get the office online</b> (beginner): rebuild the office DHCP server.</li>
+        <li><b>VLANs and a trunk for router-on-a-stick</b> (beginner): rebuild a wiped switch.</li>
+        <li><b>Branch edge: PAT, a published server and an ACL</b> (intermediate).</li>
+        <li><b>Bring AS65003 online</b> (intermediate): eBGP to two neighbouring ASes.</li>
+      </ul>
+      <h4>Leaderboard</h4>
+      <p>Each built-in and published challenge shows how many people finished it, your own best, and a leaderboard (best score, time from Start to the first 100%, and how many checks you ran). Only unedited copies count, so changing a challenge's checks takes your copy off the board. Admins can turn the leaderboard off.</p>
       <Tip>Players own their copy, so a determined one can open the editor and read the checks. Challenges are for learning, not exams.</Tip>
     </> },
 
-  { id: "account", group: "Your account", title: "Accounts, privacy and limits", icon: "keyboard", kw: "account password name email private labs limit quota sandbox internet package request invite sign out",
+  { id: "account", group: "Your account", title: "Accounts, privacy and limits", icon: "keyboard", kw: "account password name email private labs limit quota sandbox internet package request invite sign out two-factor 2fa authenticator totp recovery ntfy phone",
     when: (p) => p.accounts,
     body: () => <>
       <ul>
         <li><b>Your labs are private.</b> Other users can't see or open them. Admins can, to help or tidy up.</li>
         <li><b>Account and password:</b> your name (top right) → Account and password. Changing your password signs out your other sessions.</li>
         <li><b>Forgot your password?</b> If the server sends email, use the link on the sign-in page; a reset link arrives by email and works once, for an hour. Otherwise ask the admin.</li>
+        <li><b>Two-factor sign-in:</b> Account and password → <i>Set up two-factor sign-in</i>. Scan the QR code with an authenticator app (Microsoft Authenticator, Google Authenticator, 1Password, Bitwarden…), type the code it shows, and save the ten recovery codes. From then on you enter a code from your phone after your password. Lost your phone? Use a recovery code, or ask the admin to remove it. Some servers require it: you'll be taken to the setup page when you sign in.</li>
+        <li><b>Alerts on your phone:</b> if the admin allows it, put an ntfy topic in Account and password and subscribe to it in the free ntfy app.</li>
         <li><b>Alert emails:</b> Account and password → <i>Email me about alerts</i> sends a digest of warnings and critical alerts from your labs, at most every 10 minutes.</li>
         <li><b>Limits:</b> the server may limit how many labs you keep, how many run at once, devices per lab, memory/CPU per device, and the disk your labs use (configs, files on lab servers, snapshots). A lab that keeps growing past the disk limit is paused. You'll get a clear message when you hit one; ask the admin if you need more.</li>
         <li><b>Lab internet:</b> on a shared server, lab devices can't reach the internet, except the package mirrors servers and firewalls need when they start. Lab-to-lab traffic inside your lab is unaffected.</li>
@@ -384,6 +396,8 @@ end`}</Cmd></li>
         <li><b>All labs:</b> every lab and its owner. Open, destroy, move to another user, or mark a lab trusted (runs privileged, outside the sandbox: only for your own labs).</li>
         <li><b>Limits & sandbox:</b> default limits, allowed images, package mirrors, the management address pool.</li>
         <li><b>Email:</b> your mail provider's SMTP details, which emails to send, and <B>Send test email</B>. The status line only says "Working" after a test was delivered with the settings as they are now.</li>
+        <li><b>Alert channels:</b> ntfy (phone push), Microsoft Teams, Slack or any JSON webhook, each with a minimum severity, a lab filter, resolved messages on or off, and quiet hours that critical alerts can break. Each alert rule can be sent to one channel or to the bell only (Settings → Alert rules → Send to). <B>Send test</B> checks a channel.</li>
+        <li><b>Two-factor:</b> Limits & sandbox → Sign-in sets who must use it (automatic = admins on a public server). Users → Remove 2FA helps someone who lost their phone.</li>
         <li><b>Audit log:</b> sign-ins (and failed ones), account, invite and settings changes, labs created, deployed and deleted.</li>
       </ul>
       <h4>On the host</h4>

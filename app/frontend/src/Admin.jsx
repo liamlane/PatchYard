@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "./api.js";
 import { Modal, Icon } from "./ui.jsx";
 
-const TABS = [["users", "Users", "grid"], ["requests", "Requests", "flag"], ["invites", "Invites", "plus"], ["labs", "All labs", "layers"], ["limits", "Limits & sandbox", "gear"], ["email", "Email", "bell"], ["audit", "Audit log", "diff"]];
+const TABS = [["users", "Users", "grid"], ["requests", "Requests", "flag"], ["invites", "Invites", "plus"], ["labs", "All labs", "layers"], ["limits", "Limits & sandbox", "gear"], ["email", "Email", "bell"], ["channels", "Alert channels", "zap"], ["audit", "Audit log", "diff"]];
 const QK = [["max_labs", "Labs"], ["max_running_labs", "Running at once"], ["max_devices", "Devices per lab"], ["device_memory_mb", "Memory per device (MB)"], ["device_cpus", "CPUs per device"], ["max_disk_mb", "Disk (MB)"]];
 const ago = (t) => (!t ? "never" : (() => { const s = Date.now() / 1000 - t; return s < 120 ? "just now" : s < 7200 ? `${Math.round(s / 60)} min ago` : s < 172800 ? `${Math.round(s / 3600)} h ago` : `${Math.round(s / 86400)} days ago`; })());
 
@@ -22,6 +22,7 @@ export default function Admin({ tab = "users", onTab, onClose, notify, me, onOpe
           {tab === "labs" && <AllLabs notify={notify} onOpenLab={(n) => { onOpenLab(n); onClose(); }} />}
           {tab === "limits" && <Limits notify={notify} />}
           {tab === "email" && <Email notify={notify} me={me} />}
+          {tab === "channels" && <Channels notify={notify} />}
           {tab === "audit" && <Audit notify={notify} />}
         </div>
       </div>
@@ -44,7 +45,7 @@ function Users({ notify, me }) {
   if (!list) return <p className="hint">Loading…</p>;
   return (<>
     <h3>Users</h3>
-    <table className="grid compact admin-users"><thead><tr><th>User</th><th>Name and email</th><th>Role</th><th>Labs</th><th>Disk</th><th>Running</th><th>Last sign-in</th><th>Lab internet</th><th /></tr></thead>
+    <table className="grid compact admin-users"><thead><tr><th>User</th><th>Name and email</th><th>Role</th><th>Labs</th><th>Disk</th><th title="Two-factor sign-in">2FA</th><th>Running</th><th>Last sign-in</th><th>Lab internet</th><th /></tr></thead>
       <tbody>{list.map((u) => (
         <tr key={u.name} className={u.disabled ? "hint" : ""}>
           <td><b>{u.name}</b>{u.name === me?.name && <span className="hint"> (you)</span>}{u.disabled && <span className="hint"> · disabled</span>}</td>
@@ -53,6 +54,7 @@ function Users({ notify, me }) {
             <option value="user">user</option><option value="admin">admin</option></select></td>
           <td>{u.labs}{u.effective_quota.max_labs ? <span className="hint"> / {u.effective_quota.max_labs}</span> : ""}</td>
           <td className={u.effective_quota.max_disk_mb && u.disk_mb > u.effective_quota.max_disk_mb ? "error" : ""}>{u.disk_mb < 1 ? "<1" : Math.round(u.disk_mb)}{u.effective_quota.max_disk_mb ? <span className="hint"> / {u.effective_quota.max_disk_mb}</span> : ""} MB</td>
+          <td>{u.two_factor ? <span className="svc-state svc-up" title={`${u.recovery_left} recovery codes left`}>on</span> : <span className="hint">off</span>}</td>
           <td className="mono">{u.running.join(", ") || "—"}</td>
           <td>{ago(u.last_login)}</td>
           <td><input type="checkbox" checked={u.role === "admin" || u.internet} disabled={u.role === "admin"} title="Full internet from this user's lab devices (otherwise package mirrors only)"
@@ -64,6 +66,7 @@ function Users({ notify, me }) {
               try { await api.adminSendReset(u.name); notify(`Reset link sent to ${u.email}`, null, "ok"); } catch (e) { notify(e.message, null, "bad"); }
             }}>Email reset link</button>}
             <button className="link" onClick={() => confirm(`Reset ${u.name}'s password? They'll be signed out.`) && patch(u.name, { reset_password: true })}>Reset password</button>
+            {u.two_factor && <button className="link" title="For a lost phone: they sign in with their password and set it up again" onClick={() => confirm(`Remove two-factor sign-in from ${u.name}? They'll be signed out.`) && patch(u.name, { reset_2fa: true }, `Two-factor removed for ${u.name}`)}>Remove 2FA</button>}
             {u.name !== me?.name && <button className="link" onClick={() => patch(u.name, { disabled: !u.disabled }, u.disabled ? `${u.name} enabled` : `${u.name} disabled and signed out`)}>{u.disabled ? "Enable" : "Disable"}</button>}
             {u.name !== me?.name && <button className="link danger" onClick={async () => {
               const withLabs = u.labs > 0;
@@ -229,6 +232,14 @@ function Limits({ notify }) {
     <p className="hint">Admins have no limits. Per-user overrides are under Users → Limits. 0 = unlimited.</p>
     <div className="formrow">{QK.map(([k, l]) => (
       <label key={k}>{l}<input className="narrow" value={q[k]} onChange={(e) => upd("users", "quota", { ...q, [k]: e.target.value.replace(/[^\d.]/g, "") })} /></label>))}</div>
+    <h3>Sign-in</h3>
+    <label className="col">Require two-factor sign-in
+      <select value={s.security.require_2fa || "auto"} onChange={(e) => upd("security", "require_2fa", e.target.value)}>
+        <option value="auto">Automatic: admins, on a public (sandboxed) server</option><option value="admins">For admins</option>
+        <option value="everyone">For everyone</option><option value="off">Not required (anyone can still turn it on)</option></select></label>
+    <p className="hint">Someone who must have it and hasn't set it up is taken straight to the setup page when they sign in. Lost phone: Users → Remove 2FA, or on the host <code>docker exec patchyard python -m app.auth reset-2fa NAME</code>.</p>
+    <h3>Challenges</h3>
+    <label className="chk"><input type="checkbox" checked={s.challenges?.leaderboard !== false} onChange={(e) => upd("challenges", "leaderboard", e.target.checked)} /> Show a leaderboard (usernames, best score, time to complete) for built-in and published challenges</label>
     <h3>Sign-up</h3>
     <label className="chk"><input type="checkbox" checked={s.users.allow_requests !== false} onChange={(e) => upd("users", "allow_requests", e.target.checked)} /> Let people request an account from the sign-in page</label>
     <p className="hint">Requests wait in Admin → Requests until you approve them. Invite links work either way.</p>
@@ -368,5 +379,85 @@ function Audit({ notify }) {
             <td title={new Date(r.ts * 1000).toLocaleString()}>{ago(r.ts)}</td><td>{r.who || <span className="hint">—</span>}</td>
             <td>{ACTIONS[r.action] || r.action}</td><td className="mono">{r.target}</td><td className="hint">{r.detail}</td><td className="mono hint">{r.ip}</td></tr>))}
           {!rows.length && <tr><td colSpan={6} className="hint">Nothing yet.</td></tr>}</tbody></table>)}
+  </>);
+}
+
+const CH_TYPES = [["ntfy", "ntfy (phone push)"], ["teams", "Microsoft Teams (Workflows webhook)"], ["slack", "Slack (incoming webhook)"], ["webhook", "Webhook (JSON POST)"]];
+const CH_HINT = {
+  ntfy: "A topic on the ntfy server below (or a full https://server/topic). Subscribe to it in the ntfy app. Token: only for a protected topic.",
+  teams: "In Teams: the channel's … menu → Workflows → “Post to a channel when a webhook request is received”, then paste the URL it gives you.",
+  slack: "In Slack: an app with Incoming Webhooks for the channel; paste its https://hooks.slack.com/… URL.",
+  webhook: "Patchyard POSTs JSON (event, severity, rule, lab, node, message, ts). Optional bearer token.",
+};
+
+function Channels({ notify }) {
+  const [all, setAll] = useState(null);
+  const [c, setC] = useState(null);
+  const [dirty, setDirty] = useState(false);
+  const [status, setStatus] = useState({});
+  const [labs, setLabs] = useState([]);
+  const load = useCallback(async () => {
+    try { const s = await api.settings(); setAll(s); setC(s.channels); setDirty(false); setStatus(await api.adminChannelStatus()); setLabs(await api.labs()); }
+    catch (x) { notify(x.message, null, "bad"); }
+  }, [notify]);
+  useEffect(() => { load(); }, [load]);
+  if (!c) return <p className="hint">Loading…</p>;
+  const upd = (k, v) => { setC({ ...c, [k]: v }); setDirty(true); };
+  const setItem = (i, p) => upd("items", c.items.map((x, j) => (j === i ? { ...x, ...p } : x)));
+  const save = async () => {
+    try { const r = await api.saveSettings({ ...all, channels: c }); setAll({ ...r, _meta: all._meta }); setC(r.channels); setDirty(false); notify("Alert channels saved", null, "ok"); return r.channels; }
+    catch (x) { notify(x.message, null, "bad"); return null; }
+  };
+  return (<>
+    <h3>Alert channels</h3>
+    <p className="hint">Besides the bell and email digests, alerts can go to phones (ntfy), Teams, Slack or any webhook. Each alert rule can pick a channel (Settings → Alert rules → Send to); otherwise every channel gets the alerts it wants. At most 20 messages per channel in 10 minutes, then a single "more held back" note.</p>
+    {c.items.map((x, i) => (
+      <div key={x.id || i} className="subbox ch-item">
+        <div className="formrow">
+          <label>Name<input value={x.name} onChange={(e) => setItem(i, { name: e.target.value })} /></label>
+          <label>Type<select value={x.type} onChange={(e) => setItem(i, { type: e.target.value })}>{CH_TYPES.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select></label>
+          <label className="chk"><input type="checkbox" checked={x.enabled} onChange={(e) => setItem(i, { enabled: e.target.checked })} /> On</label>
+          <span className="grow" />
+          {status[x.id] && <span className={status[x.id].ok ? "hint" : "error"}>{status[x.id].ok ? `last sent ${ago(status[x.id].at)}` : `last failed: ${status[x.id].error}`}</span>}
+        </div>
+        <div className="formrow">
+          <label className="wide">{x.type === "ntfy" ? "Topic" : "Webhook URL"}<input value={x.url} placeholder={x.type === "ntfy" ? "patchyard-alerts-k3x9" : "https://…"} onChange={(e) => setItem(i, { url: e.target.value.trim() })} />
+            <span className="hint">{CH_HINT[x.type]}</span></label>
+        </div>
+        <div className="formrow">
+          {(x.type === "ntfy" || x.type === "webhook") && <label>Token<input type="password" autoComplete="new-password" value={x.token || ""} placeholder={x.token_set ? "saved (blank keeps it)" : "optional"} onChange={(e) => setItem(i, { token: e.target.value })} /></label>}
+          <label>At least<select value={x.min_severity} onChange={(e) => setItem(i, { min_severity: e.target.value })}>{["info", "warning", "critical"].map((v) => <option key={v}>{v}</option>)}</select></label>
+          <label className="chk"><input type="checkbox" checked={x.resolved} onChange={(e) => setItem(i, { resolved: e.target.checked })} /> Also when resolved</label>
+          <label>Quiet from<input className="narrow" placeholder="22:00" value={x.quiet?.start || ""} onChange={(e) => setItem(i, { quiet: { ...x.quiet, start: e.target.value.trim() } })} /></label>
+          <label>to<input className="narrow" placeholder="07:00" value={x.quiet?.end || ""} onChange={(e) => setItem(i, { quiet: { ...x.quiet, end: e.target.value.trim() } })} /></label>
+          <label className="chk"><input type="checkbox" checked={x.quiet?.critical !== false} onChange={(e) => setItem(i, { quiet: { ...x.quiet, critical: e.target.checked } })} /> Critical breaks quiet hours</label>
+        </div>
+        <div className="formrow">
+          <label className="wide">Only these labs <span className="hint">(blank = all)</span>
+            <select multiple size={Math.min(4, Math.max(2, labs.length))} value={x.labs || []} onChange={(e) => setItem(i, { labs: [...e.target.selectedOptions].map((o) => o.value) })}>
+              {labs.map((l) => <option key={l.name} value={l.name}>{l.name}{l.owner ? ` · ${l.owner}` : ""}</option>)}</select></label>
+        </div>
+        <div className="row">
+          <button className="link danger" onClick={() => upd("items", c.items.filter((_, j) => j !== i))}>Remove</button>
+          <span className="grow" />
+          <button onClick={async () => {
+            const saved = dirty ? await save() : c;
+            if (!saved) return;
+            const id = saved.items[i]?.id;
+            const r = await api.adminChannelTest(id).catch((e) => ({ ok: false, error: e.message }));
+            notify(r.ok ? `Test sent to ${x.name}` : `${x.name}: ${r.error}`, null, r.ok ? "ok" : "bad");
+            setStatus(await api.adminChannelStatus().catch(() => ({})));
+          }}>{dirty ? "Save and send test" : "Send test"}</button>
+        </div>
+      </div>))}
+    <button onClick={() => upd("items", [...c.items, { id: "", name: "Phone", type: "ntfy", url: "", min_severity: "warning", resolved: true, enabled: true, quiet: { start: "", end: "", critical: true }, labs: [] }])}>
+      <Icon name="plus" size={14} /> Add channel</button>
+    <h3>Settings</h3>
+    <div className="formrow">
+      <label>Time zone for quiet hours<input value={c.timezone} onChange={(e) => upd("timezone", e.target.value.trim())} placeholder="Europe/London" /></label>
+      <label className="wide">ntfy server<input value={c.ntfy_server} onChange={(e) => upd("ntfy_server", e.target.value.trim())} /></label>
+    </div>
+    <label className="chk block"><input type="checkbox" checked={c.user_ntfy} onChange={(e) => upd("user_ntfy", e.target.checked)} /> Let users get their own labs' alerts on their phone (ntfy topic in Settings → Account)</label>
+    <div className="row"><span className="grow" />{dirty && <span className="hint">Unsaved changes</span>}<button disabled={!dirty} onClick={load}>Discard</button><button className="primary" disabled={!dirty} onClick={save}>Save</button></div>
   </>);
 }

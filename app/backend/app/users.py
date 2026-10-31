@@ -11,7 +11,7 @@ Users also carry "full_name" and "email" (optional for accounts made before 0.12
 Invite tokens are only shown once (when created); the file keeps their hash.
 A single-user install (one admin, login on) is the same thing with one user in it.
 """
-import hashlib, json, os, re, secrets, threading, time
+import hashlib, hmac, json, os, re, secrets, threading, time
 from . import settings
 
 FILE = settings.FILE.parent / "users.json"
@@ -140,7 +140,8 @@ def any_users() -> bool:
 def public(name: str, u: dict) -> dict:
     return {"name": name, "full_name": u.get("full_name", ""), "email": u.get("email", ""), "role": u.get("role", "user"), "created": u.get("created"), "last_login": u.get("last_login"),
             "disabled": bool(u.get("disabled")), "internet": bool(u.get("internet")), "quota": u.get("quota") or {},
-            "alert_email": bool(u.get("alert_email"))}
+            "alert_email": bool(u.get("alert_email")), "two_factor": bool((u.get("totp") or {}).get("secret")),
+            "recovery_left": len(u.get("recovery") or []), "ntfy_topic": u.get("ntfy_topic", "")}
 
 
 def create(name: str, password: str | None, role: str = "user", internet: bool = False,
@@ -215,6 +216,11 @@ def update(name: str, **kw) -> dict:
             u["internet"] = bool(kw["internet"])
         if "alert_email" in kw:
             u["alert_email"] = bool(kw["alert_email"])
+        if "ntfy_topic" in kw:
+            t = str(kw["ntfy_topic"] or "").strip()
+            if t and not re.fullmatch(r"[A-Za-z0-9_-]{6,64}", t):
+                raise UserError("ntfy topic: 6-64 letters, digits, _ and - (pick something hard to guess)")
+            u["ntfy_topic"] = t
         if "full_name" in kw:
             u["full_name"] = check_text(kw["full_name"], "name", 2, 80, required=False)
         if "email" in kw:
@@ -476,3 +482,90 @@ def use_reset(token: str, password: str) -> str:
         d["resets"].pop(_th(token), None)
         _save(d)
         return name
+
+
+# ------------------------------------------------------------------ two-factor sign-in (TOTP)
+
+def has_2fa(name: str) -> bool:
+    return bool(((get(name) or {}).get("totp") or {}).get("secret"))
+
+
+def totp_setup(name: str) -> str:
+    """Start enrolment: a new secret, kept as pending until a code from the app confirms it."""
+    from . import totp
+    sec = totp.new_secret()
+    with _LOCK:
+        d = _load()
+        if name not in d["users"]:
+            raise UserError(f"no user {name}")
+        d["users"][name]["totp_pending"] = {"secret": sec, "at": time.time()}
+        _save(d)
+    return sec
+
+
+def totp_enable(name: str, code: str) -> list[str]:
+    """Confirm enrolment with a code from the app; returns the recovery codes (shown once)."""
+    from . import totp
+    with _LOCK:
+        d = _load()
+        u = d["users"].get(name)
+        pend = (u or {}).get("totp_pending") or {}
+        if not pend or time.time() - pend.get("at", 0) > 900:
+            raise UserError("start again: the setup expired")
+        st = totp.check(pend["secret"], code)
+        if st is None:
+            raise UserError("that code didn't match: check the time on your phone and try the next code")
+        codes = totp.recovery_codes()
+        u["totp"] = {"secret": pend["secret"], "last_step": st, "enabled_at": time.time()}
+        u["recovery"] = [totp.hash_code(c) for c in codes]
+        u.pop("totp_pending", None)
+        _save(d)
+    return codes
+
+
+def totp_disable(name: str):
+    with _LOCK:
+        d = _load()
+        u = d["users"].get(name)
+        if not u:
+            raise UserError(f"no user {name}")
+        for k in ("totp", "totp_pending", "recovery"):
+            u.pop(k, None)
+        u["gen"] = int(u.get("gen", 1)) + 1          # sign out everywhere
+        _save(d)
+
+
+def new_recovery_codes(name: str) -> list[str]:
+    from . import totp
+    with _LOCK:
+        d = _load()
+        u = d["users"].get(name)
+        if not u or not (u.get("totp") or {}).get("secret"):
+            raise UserError("two-factor sign-in isn't on")
+        codes = totp.recovery_codes()
+        u["recovery"] = [totp.hash_code(c) for c in codes]
+        _save(d)
+    return codes
+
+
+def totp_verify(name: str, code: str) -> str | None:
+    """'totp' or 'recovery' when the code is good (and uses it up), else None."""
+    from . import totp
+    with _LOCK:
+        d = _load()
+        u = d["users"].get(name)
+        t = (u or {}).get("totp") or {}
+        if not t.get("secret") or u.get("disabled"):
+            return None
+        st = totp.check(t["secret"], code, int(t.get("last_step", -1)))
+        if st is not None:
+            t["last_step"] = st
+            _save(d)
+            return "totp"
+        h = totp.hash_code(code)
+        rec = u.get("recovery") or []
+        if any(hmac.compare_digest(h, r) for r in rec):
+            u["recovery"] = [r for r in rec if not hmac.compare_digest(h, r)]
+            _save(d)
+            return "recovery"
+    return None

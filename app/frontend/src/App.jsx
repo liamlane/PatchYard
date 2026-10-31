@@ -15,6 +15,7 @@ const Settings = lazy(() => import("./Settings.jsx"));
 const Admin = lazy(() => import("./Admin.jsx"));
 const Guide = lazy(() => import("./Guide.jsx"));
 import { ChallengePanel } from "./Challenge.jsx";
+import { Require2FA } from "./TwoFactor.jsx";
 import { createPortal } from "react-dom";
 import { setMe } from "./me.js";
 import { PortMenu } from "./Hardware.jsx";
@@ -120,8 +121,10 @@ function Workspace() {
     api.authState().then((a) => { setMe(a.user); setAuth({ checked: true, need: a.enabled && !a.logged_in, user: a.user, multi: a.multi_user, requests: a.requests, forgot: a.forgot }); })
       .catch(() => setAuth({ checked: true, need: false, user: null }));
     const h = () => setAuth((x) => ({ ...x, checked: true, need: true }));
+    const h2 = () => api.authState().then((a) => { setMe(a.user); setAuth((x) => ({ ...x, user: a.user })); }).catch(() => {});
     window.addEventListener("netlab-auth", h);
-    return () => window.removeEventListener("netlab-auth", h);
+    window.addEventListener("netlab-2fa", h2);
+    return () => { window.removeEventListener("netlab-auth", h); window.removeEventListener("netlab-2fa", h2); };
   }, []);
   useEffect(() => {
     if (!auth.checked || auth.need) return;
@@ -644,8 +647,10 @@ function Workspace() {
   if (invite) return <InvitePage token={invite[1]} />;
   const reset = location.pathname.match(/^\/reset\/([\w-]+)$/);
   if (reset) return <ResetPage token={reset[1]} />;
-  if (auth.need) return <><Login canRequest={auth.requests} canForgot={auth.forgot} onDone={() => { history.replaceState(null, "", "/"); api.authState().then((a) => { setMe(a.user); setAuth({ checked: true, need: false, user: a.user, multi: a.multi_user, requests: a.requests, forgot: a.forgot }); }); }} /><Toasts items={toasts} onClose={(id) => setToasts((x) => x.filter((t) => t.id !== id))} /></>;
+  if (auth.need) return <><Login canRequest={auth.requests} canForgot={auth.forgot} onDone={(info) => { history.replaceState(null, "", "/");
+    if (info?.recovery_left != null) setTimeout(() => notify(`Signed in with a recovery code: ${info.recovery_left} left`, "Make new ones in Account and password if you're running low.", "warn"), 800); api.authState().then((a) => { setMe(a.user); setAuth({ checked: true, need: false, user: a.user, multi: a.multi_user, requests: a.requests, forgot: a.forgot }); }); }} /><Toasts items={toasts} onClose={(id) => setToasts((x) => x.filter((t) => t.id !== id))} /></>;
   const me = auth.user;
+  if (!auth.need && me?.must_setup_2fa) return <Require2FA me={me} onDone={() => api.authState().then((a) => { setMe(a.user); setAuth((x) => ({ ...x, user: a.user })); })} />;
   return (
     <div className={`app ${sideOpen ? `app-side app-${sideOpen}` : ""}`}>
       <header className="top">

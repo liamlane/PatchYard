@@ -656,3 +656,20 @@ select.act-accept { color: var(--ok); } select.act-drop, select.act-reject { col
 .pts-in input { width: 40px; }
 .ch-actions { margin-top: 12px; }
 .audit td:first-child { white-space: nowrap; }
+/* 2FA, channels, leaderboard */
+.qr { display: inline-block; padding: 8px; background: #fff; border-radius: 8px; margin: 8px 0; line-height: 0; }
+.twofa-setup .steps li { margin: 8px 0; }
+.twofa-setup .key { user-select: all; letter-spacing: .05em; }
+.code-in { font: 600 22px var(--mono); letter-spacing: .25em; width: 9.5em; text-align: center; padding: 6px 8px; display: block; margin-top: 6px; }
+.recovery .codes { display: grid; grid-template-columns: repeat(2, max-content); gap: 6px 28px; font: 15px var(--mono); background: var(--panel-2); padding: 12px 16px; border-radius: 8px; border: 1px solid var(--line); }
+.ok-t { color: var(--ok); }
+.login-card .ok-t { margin: 0; font-weight: 500; }
+.ch-item .formrow { align-items: flex-end; }
+.ch-item select[multiple] { min-width: 260px; }
+.leaderboard { margin-bottom: 12px; }
+.leaderboard tr.me td { background: var(--accent-soft); }
+.lb-line { margin: 0 0 6px; }
+.qr { display: block; width: max-content; }
+.twofa-setup .hint { display: block; }
+.login-card .code-in { width: 9.5em; }
+.ch-item .formrow label.chk { flex-direction: row; align-items: center; gap: 6px; }

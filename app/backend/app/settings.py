@@ -30,7 +30,8 @@ DEFAULTS = {
     "snapshots": {"auto_before_deploy": True, "keep_auto": 20},
     "alerts": {"enabled": True, "grace_s": 120, "rules": DEFAULT_RULES},
     "notifications": {"toast_min_severity": "warning", "toast_resolved": True, "sound": False},
-    "security": {"auth_enabled": False, "password_hash": "", "session_hours": 12},
+    # require_2fa: auto = admins on a public (sandboxed) server, otherwise off
+    "security": {"auth_enabled": False, "password_hash": "", "session_hours": 12, "require_2fa": "auto"},
     # multi-user: default limits for non-admin users (0 = unlimited) and images they may pick
     "users": {"quota": {"max_labs": 5, "max_running_labs": 1, "max_devices": 20, "device_memory_mb": 512, "device_cpus": 1.0,
                         "max_disk_mb": 2048},
@@ -44,7 +45,12 @@ DEFAULTS = {
               "from_addr": "", "from_name": "Patchyard", "site_url": "", "admin_to": [], "allow_invalid_cert": False,
               "notify": {"requests": True, "accounts": True, "password_reset": True, "alerts": True},
               "verified": {"at": None, "to": "", "key": ""}},
+    # alert channels besides the bell: ntfy push, Slack/Teams/generic webhooks (tokens are write-only)
+    "channels": {"items": [], "timezone": "Europe/London", "ntfy_server": "https://ntfy.sh", "user_ntfy": False},
+    # challenges: per-server leaderboard of completions
+    "challenges": {"leaderboard": True},
 }
+CHANNEL_TYPES = ("ntfy", "slack", "teams", "webhook")
 ENV = {("lab_defaults", "frr_image"): "NETLAB_FRR_IMAGE", ("lab_defaults", "pc_image"): "NETLAB_PC_IMAGE",
        ("lab_defaults", "alpine_image"): "NETLAB_ALPINE_IMAGE", ("lab_defaults", "mgmt_network"): "NETLAB_MGMT_NETWORK",
        ("lab_defaults", "mgmt_subnet"): "NETLAB_MGMT_SUBNET", ("monitoring", "interval"): "NETLAB_METRICS_INTERVAL",
@@ -132,7 +138,8 @@ def validate(s: dict) -> dict:
             raise ValueError(f"bad severity {r.get('severity')}")
         rr = {"id": str(r.get("id") or f"r-{len(rules)}")[:40], "name": str(r.get("name") or RULE_TYPES[r["type"]])[:80],
               "type": r["type"], "severity": r["severity"], "for_s": max(0, min(3600, float(r.get("for_s") or 0))),
-              "enabled": bool(r.get("enabled", True)), "lab": str(r.get("lab") or "")[:31], "node": str(r.get("node") or "")[:31]}
+              "enabled": bool(r.get("enabled", True)), "lab": str(r.get("lab") or "")[:31], "node": str(r.get("node") or "")[:31],
+              "channels": [str(c)[:40] for c in (r.get("channels") or []) if c][:20]}
         if r["type"] in ("cpu_high", "mem_high", "link_util", "errors_rising", "drops_rising", "probe_loss", "probe_rtt"):
             rr["threshold"] = max(0, float(r.get("threshold") or 0))
         if r["type"] in ("probe_loss", "probe_rtt"):
@@ -163,6 +170,45 @@ def validate(s: dict) -> dict:
     sb["proxy_port"] = int(sb["proxy_port"])
     sb["proxy_allow"] = [str(h).strip().lower() for h in sb.get("proxy_allow") or [] if str(h).strip()][:50]
     import re as _re
+    if s["security"].get("require_2fa") not in ("auto", "off", "admins", "everyone"):
+        raise ValueError("two-factor requirement must be auto, off, admins or everyone")
+    s["challenges"] = {"leaderboard": bool((s.get("challenges") or {}).get("leaderboard", True))}
+    ch = s["channels"]
+    try:
+        from zoneinfo import ZoneInfo
+        ZoneInfo(str(ch.get("timezone") or "UTC"))
+    except Exception:
+        raise ValueError(f"unknown time zone {ch.get('timezone')!r} (e.g. Europe/London)")
+    ch["timezone"] = str(ch.get("timezone") or "UTC")
+    ch["ntfy_server"] = str(ch.get("ntfy_server") or "https://ntfy.sh").strip().rstrip("/")
+    if not _re.fullmatch(r"https?://[A-Za-z0-9.-]+(:\d+)?(/[\w./-]*)?", ch["ntfy_server"]):
+        raise ValueError("ntfy server must look like https://ntfy.sh")
+    ch["user_ntfy"] = bool(ch.get("user_ntfy"))
+    items, ids = [], set()
+    for i, c in enumerate((ch.get("items") or [])[:20]):
+        t = c.get("type")
+        if t not in CHANNEL_TYPES:
+            raise ValueError(f"channel {i + 1}: unknown type {t!r}")
+        cid = str(c.get("id") or "")[:40] or f"ch{i + 1}"
+        if not _re.fullmatch(r"[\w-]{1,40}", cid) or cid in ids:
+            cid = f"ch{i + 1}-{os.urandom(2).hex()}"
+        ids.add(cid)
+        url = str(c.get("url") or "").strip()[:500]
+        if t != "ntfy" and not _re.fullmatch(r"https?://\S+", url):
+            raise ValueError(f"channel {c.get('name') or i + 1}: give the webhook URL")
+        if t == "ntfy" and not _re.fullmatch(r"(https?://[A-Za-z0-9.:-]+/)?[A-Za-z0-9_-]{1,64}", url):
+            raise ValueError(f"channel {c.get('name') or i + 1}: give an ntfy topic (or https://server/topic)")
+        q = c.get("quiet") or {}
+        for k in ("start", "end"):
+            if q.get(k) and not _re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", str(q[k])):
+                raise ValueError(f"channel {c.get('name') or i + 1}: quiet hours look like 22:00")
+        if c.get("min_severity", "warning") not in SEVERITIES:
+            raise ValueError(f"channel {c.get('name') or i + 1}: bad severity")
+        items.append({"id": cid, "name": str(c.get("name") or t)[:60], "type": t, "url": url, "token": str(c.get("token") or "")[:300],
+                      "min_severity": c.get("min_severity", "warning"), "resolved": bool(c.get("resolved", True)),
+                      "enabled": bool(c.get("enabled", True)), "labs": [str(x)[:31] for x in (c.get("labs") or []) if x][:50],
+                      "quiet": {"start": str(q.get("start") or ""), "end": str(q.get("end") or ""), "critical": bool(q.get("critical", True))}})
+    ch["items"] = items
     em = s["email"]
     addr = _re.compile(r"^[^@\s<>\"']{1,64}@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
     em["enabled"] = bool(em.get("enabled"))
@@ -215,6 +261,11 @@ def save(new: dict, keep_secret=True) -> dict:
         if not (new.get("email") or {}).get("password") and not (new.get("email") or {}).get("password_clear"):
             s["email"]["password"] = cur["email"]["password"]
         s["email"]["verified"] = cur["email"]["verified"]          # only the test endpoint sets this
+        old = {c["id"]: c for c in cur["channels"]["items"]}         # channel tokens are write-only too
+        clear = {c.get("id") for c in ((new.get("channels") or {}).get("items") or []) if c.get("token_clear")}
+        for c in s["channels"]["items"]:
+            if not c["token"] and c["id"] in old and c["id"] not in clear:
+                c["token"] = old[c["id"]]["token"]
     with _LOCK:
         FILE.parent.mkdir(parents=True, exist_ok=True)
         tmp = FILE.with_suffix(".tmp")
@@ -244,6 +295,9 @@ def set_email_verified(to: str | None):
 def public(s: dict | None = None) -> dict:
     s = copy.deepcopy(s or load())
     s["security"]["password_set"] = bool(s["security"].pop("password_hash", ""))
+    for c in s["channels"]["items"]:
+        c["token_set"] = bool(c.pop("token", ""))
+        c["token"] = ""
     s["email"]["password_set"] = bool(s["email"].get("password"))
     s["email"]["password"] = ""
     s["email"]["working"] = bool(s["email"]["verified"].get("at")) and s["email"]["verified"].get("key") == email_key(load()["email"])

@@ -81,7 +81,35 @@ Patchyard sends email through your mail provider's SMTP server: account requests
 
 If the test can't connect, the VPS provider may block outgoing SMTP. Port 587 with STARTTLS is the most likely to be open; port 25 often isn't. Add your own email under Settings → Account so admin emails reach you.
 
-## 6. Let people in
+## 6. Two-factor sign-in
+
+On a `--public` server, admins must use two-factor sign-in (an authenticator app on their phone). The first time you sign in after updating to 0.14.0, Patchyard takes you to the setup page:
+
+1. Scan the QR code with Microsoft Authenticator, Google Authenticator, 1Password, Bitwarden or similar.
+2. Type the 6-digit code it shows.
+3. Save the ten **recovery codes** (copy or download them into your password manager). Each signs you in once if you lose your phone.
+
+From then on, sign-in asks for a code after your password. To require it for everyone, or turn the requirement off, use **Admin** → **Limits & sandbox** → **Sign-in**. Anyone can turn it on for themselves in Settings → Account.
+
+Lost phone and recovery codes:
+
+- someone else: Admin → Users → **Remove 2FA**;
+- you (the only admin): `sudo docker exec patchyard python -m app.auth reset-2fa yourname`, then sign in and set it up again.
+
+## 7. Alert channels
+
+Besides the bell and email, alerts can go to your phone and to team chat: **Admin** → **Alert channels** → **Add channel**.
+
+| Type | What you need |
+| --- | --- |
+| ntfy (phone push) | Install the ntfy app, subscribe to a hard-to-guess topic on ntfy.sh (or your own ntfy server), and enter the topic |
+| Microsoft Teams | In the channel: … → **Workflows** → *Post to a channel when a webhook request is received*; paste the URL it gives you |
+| Slack | An app with Incoming Webhooks for the channel; paste its `https://hooks.slack.com/…` URL |
+| Webhook | Any URL that accepts a JSON POST (optional bearer token) |
+
+Each channel has a minimum severity, an optional list of labs, whether to send "resolved" messages, and quiet hours (critical alerts can break through). **Send test** checks it. Under Settings → Alert rules, **Send to** sends a rule to one channel, or to the bell only. With *Let users get their own labs' alerts on their phone* ticked, each user can enter their own ntfy topic in Settings → Account.
+
+## 8. Let people in
 
 There are two ways in: invite links, and account requests from the sign-in page.
 
@@ -109,7 +137,7 @@ In **Admin**:
   - the package mirrors labs may reach,
   - the management address pool (default `172.30.0.0/16`, cut into /26 per lab).
 
-## 7. Check it works
+## 9. Check it works
 
 After installing or updating, run the self-test. It deploys real labs through the API, waits for routing and services, checks them, and cleans up:
 
@@ -164,6 +192,7 @@ sudo docker logs -f patchyard                                     # app log
 sudo docker logs -f patchyard-caddy                               # HTTPS / certificate log
 sudo docker exec patchyard python -m app.auth list                # accounts
 sudo docker exec patchyard python -m app.auth reset-password NAME # prints a new password
+sudo docker exec patchyard python -m app.auth reset-2fa NAME      # removes two-factor sign-in (lost phone)
 sudo nft list table ip patchyard                                  # the lab egress firewall and its counters
 sudo docker exec patchyard python -m app.selftest                 # deploy a lab and check it end to end
 ```

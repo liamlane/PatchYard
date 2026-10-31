@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "./api.js";
 import { Icon, useInterval, fmtBps } from "./ui.jsx";
+import { CodeStep } from "./TwoFactor.jsx";
 
 const ago = (ts) => {
   const s = Math.max(0, Date.now() / 1000 - ts);
@@ -102,17 +103,21 @@ export function Login({ onDone, canRequest, canForgot }) {
   const [pw, setPw] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
+  const [ticket, setTicket] = useState(null);
+  const notice = new URLSearchParams(location.search).get("reset") ? "Password changed. Sign in with it and your two-factor code." : "";
   const go = async (e) => {
     e.preventDefault(); setBusy(true); setErr("");
-    try { await api.login(user.trim().toLowerCase(), pw); onDone(); } catch (x) { setErr(x.message); }
+    try { const r = await api.login(user.trim().toLowerCase(), pw); if (r.two_factor) setTicket(r.ticket); else onDone(); } catch (x) { setErr(x.message); }
     setBusy(false);
   };
+  if (ticket) return <div className="login"><CodeStep ticket={ticket} onDone={onDone} onBack={() => { setTicket(null); setPw(""); }} /></div>;
   if (mode === "forgot") return <Forgot onBack={() => setMode("signin")} />;
   if (mode !== "signin") return <RequestAccount sent={mode === "sent"} onSent={() => setMode("sent")} onBack={() => { setMode("signin"); history.replaceState(null, "", "/"); }} />;
   return (
     <div className="login">
       <form className="login-card" onSubmit={go}>
         {BRAND}
+        {notice && <p className="ok-t">{notice}</p>}
         <label className="col">Username<input autoFocus value={user} onChange={(e) => setUser(e.target.value)} autoComplete="username" autoCapitalize="none" /></label>
         <label className="col">Password<input type="password" value={pw} onChange={(e) => setPw(e.target.value)} autoComplete="current-password" /></label>
         {err && <p className="error">{err}</p>}
@@ -163,7 +168,7 @@ export function ResetPage({ token }) {
   useEffect(() => { api.resetCheck(token).then(setState).catch((e) => setState({ error: e.message })); }, [token]);
   const go = async (e) => {
     e.preventDefault(); setBusy(true); setErr("");
-    try { await api.resetDo(token, f.password); location.href = "/"; } catch (x) { setErr(x.message); }
+    try { const r = await api.resetDo(token, f.password); location.href = r.sign_in ? "/?reset=1" : "/"; } catch (x) { setErr(x.message); }
     setBusy(false);
   };
   return (

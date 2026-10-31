@@ -112,6 +112,16 @@ async def send_welcome_reset(name: str, reset: bool = False) -> tuple[bool, str]
     return await mailer.send(u["email"], f"Patchyard: {title.lower()}", text, html_body)
 
 
+def security_notice(name: str, title: str, text: str):
+    """Tell someone about a change to their account's security (2FA on/off/reset)."""
+    u = users.get(name) or {}
+    if not u.get("email") or not mailer.enabled():
+        return
+    first = (u.get("full_name") or name).split(" ")[0]
+    t, h = mailer.render(title, [f"Hi {first},", text], ("Open Patchyard", mailer.site_url()) if mailer.site_url() else None, _foot())
+    mailer.send_bg(u["email"], f"Patchyard: {title.lower()}", t, h)
+
+
 # ------------------------------------------------------------------ alert digests
 
 DIGEST_EVERY = 600

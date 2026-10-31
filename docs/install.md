@@ -148,6 +148,10 @@ Patchyard was called netlab before 0.12.0. To upgrade, run the 0.12.0 installer,
 | Servers/firewalls come up without services | they install Alpine packages at first start: the host needs to reach `dl-cdn.alpinelinux.org` |
 | Clash with an existing 172.31.255.0/24 network | change the management subnet in Settings → Lab defaults, then redeploy |
 | Locked out | `sudo docker exec patchyard python -m app.auth reset-password NAME` (prints a new password) |
+| Lost phone and recovery codes | `sudo docker exec patchyard python -m app.auth reset-2fa NAME`, then sign in and set two-factor up again |
+| Two-factor codes always "wrong" | the phone's clock is off: turn on automatic time; codes are accepted 30 s either side |
+| `python -m app.selftest`: 2fa-setup-required | the first admin must set up two-factor sign-in first (sign in once in the browser) |
+| Teams channel test fails with HTTP 400/404 | use a Workflows webhook (*Post to a channel when a webhook request is received*); the old Office 365 connector URLs are retired |
 | Create or reset an admin from the shell | `echo 'new-password' \| sudo docker exec -i patchyard python -m app.auth create-admin NAME` |
 | Email test: "couldn't connect" | the host or port is wrong, or your server's provider blocks outgoing SMTP; try 587 with STARTTLS (port 25 is often blocked) |
 | Email test: "refused the username or password" | Microsoft 365 and Gmail need an *app password* (and SMTP AUTH enabled for the mailbox in Microsoft 365) |

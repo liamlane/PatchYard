@@ -1,10 +1,10 @@
 # Roadmap
 
-## Next (0.14.0)
-- **Two-factor sign-in** (TOTP authenticator apps), required for admins on public servers.
-- **More notification channels**: phone push via ntfy, Teams/Slack webhooks, per-rule routing and quiet hours.
-- **More built-in challenges** (ACLs, VLANs, BGP, NAT) and a challenge leaderboard per server.
-- Shared (team) labs and read-only sharing for instructors.
+## Next (0.15.0)
+- **Shared labs:** invite other users to a lab (edit or read-only), so an instructor can watch or help.
+- **Passkeys** (WebAuthn) as a second factor or instead of a password.
+- **Challenge packs:** import/export a set of challenges, and more built-ins (STP, HSRP-style failover with FRR's VRRP, DHCP relay, IPv6).
+- Download Simulation captures as pcap for Wireshark.
 - Verify the 1-hour history check on a long-running install.
 
 ## Planned
@@ -24,6 +24,7 @@
 - Per-hop Simulation stepping (hold packets at each device like Packet Tracer).
 
 ## Done
+- 0.14.0: two-factor sign-in with recovery codes and a per-server policy; alert channels (ntfy, Teams, Slack, webhooks) with per-rule routing, quiet hours and rate limits; personal phone alerts; three new built-in challenges and a leaderboard.
 - 0.13.0: email (SMTP) with test and status, forgot-password, emailed invites and alert digests; lab challenges with a Check button, built-ins and publishing; audit log; per-user disk allowance; self-test; performance and stability pass.
 - 0.12.1: account requests with admin approval, names and emails on accounts, built-in help & how-to guide.
 - Phase 1 and Phase 2 containerlab labs verified on a live host (incl. timed failover test).

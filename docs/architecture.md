@@ -236,6 +236,17 @@ Events and who gets them:
 
 Links use the configured site address or `https://$PATCHYARD_DOMAIN`, never the request's `Host` header, so a forged header can't redirect a reset link.
 
+## Alert channels
+
+`channels.py`. A background task reads new alert events every 3 s and routes each one: the rule's `channels` (empty = every channel, `__none__` = bell only), then each channel's minimum severity, lab filter, resolved flag and quiet hours (in `channels.timezone`; a window like 22:00–07:00 wraps midnight). Messages go out with `urllib` in a worker thread with a 10 s timeout:
+
+- **ntfy:** a POST to `server/topic` with Title, Priority (urgent for critical) and Tags headers;
+- **Teams:** an Adaptive Card in a `message` envelope, the format Workflows webhooks accept;
+- **Slack:** `{"text": …}`;
+- **webhook:** the event as JSON.
+
+Each channel may send 20 messages per 10 minutes; anything over that is counted and summarised in one message once the window allows. Personal ntfy topics are only ever posted to the admin's ntfy server, so users can't make Patchyard call arbitrary URLs.
+
 ## Performance
 
 Many browsers poll the same server, so the hot paths are cached:
@@ -288,6 +299,8 @@ Patchyard itself can start privileged containers and enter any namespace, so who
 - `PUT /api/labs/<lab>` keeps the server's `owner`/`trusted`/`sandbox_subnet` whatever the browser sends. For normal users it also refuses raw containerlab definitions (`sandbox.check_raw`) and images outside the allowed list.
 
 **Quotas** (`users.quota`): labs, labs running at once, devices per lab, memory/CPU per device, and disk (`max_disk_mb`, default 2048). They come from Settings `users.quota`, with per-user overrides; admins are unlimited. They're checked on create, save, deploy, live add, import, upload, snapshot and challenge start. Disk is the size of the user's lab folders, measured with a 60 s cache. A watcher pauses a user's running labs when they pass 110% of the allowance (a device writing into a bind-mounted folder), records it in the audit log and emails the owner.
+
+**Two-factor sign-in** (`totp.py`, `users.py`): RFC 6238 TOTP (SHA-1, 6 digits, 30 s), a 160-bit secret per user in `users.json`, accepted one step either side, and never the same step twice (the last used step is stored). Ten recovery codes are stored as SHA-256 hashes and each works once. A correct password returns a signed five-minute *ticket* instead of a session (`2fa.user.expiry.gen.sig`); `POST /api/auth/2fa/login` with the ticket and a code sets the cookie. Wrong codes are rate-limited per user and per address. The policy (`security.require_2fa`: auto/admins/everyone/off) is enforced in the middleware: a signed-in user who must have 2FA and doesn't gets 403 `2fa-setup-required` everywhere except `/api/auth/*`, and the UI shows the setup page. A password reset doesn't sign in when 2FA is on.
 
 **Audit log** (`audit.py`): sign-ins and failures, password changes and resets, account requests, invites, user and role changes, settings changes (which sections), lab create/deploy/destroy/delete/move, challenge start/publish, and email tests. One JSON line each in `<home>/audit.log`, readable by admins in Admin → Audit log.
 
