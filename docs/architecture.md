@@ -338,6 +338,7 @@ Patchyard itself can start privileged containers and enter any namespace, so who
 **Sandbox** (`sandbox.py`, `proxy.py`; on with `--public` / `PATCHYARD_SANDBOX=1`):
 
 - **Node spec:** every node spec is rewritten to `privileged: false`, `cap-add: [NET_ADMIN, NET_RAW]`, `sysctls: {net.ipv4.ip_forward: 1}`, plus memory/CPU limits and a `PATCHYARD_PROXY` variable.
+- **FRR:** its daemons request `CAP_SYS_ADMIN` (only used for network-namespace VRFs) and exit if they can't have it. `app/capshim/capshim.c`, built for musl into the image, is copied into each lab as `configs/common/capshim.so`, bind-mounted into FRR containers and loaded with `LD_PRELOAD`; it wraps `cap_set_proc()` and drops any capability outside the container's bounding set from the request.
 - **Exec lines:** `apk` runs through the proxy. `sysctl -w` and `/proc/sys` writes are taken out of the exec lines, and Patchyard sets them from outside with `nsenter -n` after deploy, power-on and live add (`sandbox.fixups`).
 - **Management network:** each lab gets `py-<lab>`, a subnet from `sandbox.mgmt_pool` stored as `sandbox_subnet`, with containerlab `external-access: false`.
 - **Host bridges** (e.g. the MPLS template's INET bridge) must be named `br<hash of lab>`, so labs can't touch each other's or the host's bridges.

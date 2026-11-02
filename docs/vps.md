@@ -203,7 +203,7 @@ Every line should be a ✓. On a `--public` server it also checks the lab egress
 
 | Threat | What stops it |
 | --- | --- |
-| Root on the host from a device shell | Devices are unprivileged containers with only `NET_ADMIN` + `NET_RAW`, inside their own network namespace. Sysctls they'd need (`ip_forward`, MPLS) are set by Patchyard from outside. |
+| Root on the host from a device shell | Devices are unprivileged containers with only `NET_ADMIN` + `NET_RAW`, inside their own network namespace. Sysctls they'd need (`ip_forward`, MPLS) are set by Patchyard from outside. FRR's daemons ask for `CAP_SYS_ADMIN` at start-up and refuse to run without it, so a small preloaded library (`capshim`) trims that request to what the container is allowed instead of granting it. |
 | Reaching another user's devices | Each lab has its own Docker management network (containerlab `external-access: false`); Docker isolates them from each other. Data-plane cables are veth pairs between that lab's own devices. |
 | Attacking the internet from your IP | An nftables table on the host (`ip patchyard`) rejects any traffic from the lab pool except replies, and Alpine package downloads (`apk`) go through Patchyard's proxy, which only connects to the allowed mirrors on ports 80/443. |
 | Reaching the host's services | The same table rejects lab traffic to the host except the proxy port; Patchyard's own web port is bound to 127.0.0.1. |

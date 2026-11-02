@@ -9,6 +9,12 @@ RUN npm ci --no-audit --no-fund
 COPY app/frontend/ ./
 RUN npm run build
 
+# ---- capshim: lets FRR start in sandboxed (unprivileged) lab containers; musl, like the FRR image ----
+FROM alpine:3.20 AS capshim
+RUN apk add --no-cache gcc musl-dev
+COPY app/capshim/capshim.c /src/
+RUN gcc -O2 -shared -fPIC -o /capshim.so /src/capshim.c && strip /capshim.so
+
 # ---- runtime ----
 FROM python:3.12-slim-bookworm
 ARG CLAB_VERSION=0.82.0
@@ -35,6 +41,7 @@ COPY app/backend/requirements.txt ./
 RUN pip install -r requirements.txt
 COPY app/backend/ ./
 COPY --from=ui /ui/dist /opt/patchyard-app/frontend/dist
+COPY --from=capshim /capshim.so /opt/patchyard-app/capshim.so
 
 LABEL org.opencontainers.image.title="Patchyard" \
       org.opencontainers.image.description="Self-hosted Packet Tracer-style network lab (containerlab + FRR)" \

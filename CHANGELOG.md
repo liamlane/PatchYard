@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.16.2
+- **Fixed: routers didn't route on a sandboxed (public) server.** FRR's daemons (zebra, ospfd, bgpd, mgmtd, isisd, bfdd) ask for `CAP_SYS_ADMIN` when they start and exit without it ("privs_init: initial cap_set_proc failed"), and sandboxed devices deliberately don't get it. Routers came up with no addresses and no routing; only ldpd and staticd ran. A small preloaded library (`capshim`) now trims FRR's request to the capabilities the container has, so the daemons start without weakening the sandbox. Affects routers, ISP and Internet devices. Redeploy labs that were deployed on a sandboxed server to pick it up. Private (non-sandboxed) installs weren't affected.
+
 ## 0.16.1
 - **Self-test shows its progress.** Every phase prints a line with the elapsed time: devices coming up (`3/5 running`), a countdown while routing settles, and each attempt at the checks (`attempt 2: 5/8 passing · waiting on: …`). Long calls print a "still working" line every 10 s. The total time is shown at the end.
 - **Self-test explains failures.** For every device with a failing check it prints the container's state, privileges and capabilities, running processes, interface addresses, FRR daemons and config folder, and the last lines of its log.

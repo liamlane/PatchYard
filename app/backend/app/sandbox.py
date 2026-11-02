@@ -11,7 +11,8 @@ When settings sandbox.enabled is on (installer --public):
   * a small HTTP(S) proxy (proxy.py) lets devices fetch packages from sandbox.proxy_allow only.
 Admins can mark a lab "trusted" to run it the old way (privileged, shared network).
 """
-import ipaddress, json, re, shlex
+import ipaddress, json, os, re, shlex, shutil
+from pathlib import Path
 from . import settings, users
 from .util import run
 
@@ -71,6 +72,33 @@ def _apk(cmd: str) -> str:
     return cmd
 
 
+# FRR's daemons insist on CAP_SYS_ADMIN, which a sandboxed device doesn't get, and exit without it.
+# capshim (app/capshim, built into the image) is preloaded into FRR containers and drops capabilities
+# the container isn't allowed from FRR's request, so zebra/ospfd/bgpd start with what they need.
+SHIM = Path(os.environ.get("PATCHYARD_CAPSHIM", "/opt/patchyard-app/capshim.so"))
+SHIM_BIND = "configs/common/capshim.so"
+SHIM_PATH = "/usr/local/lib/patchyard-capshim.so"
+
+
+def _is_frr(spec: dict) -> bool:
+    return "frr" in str(spec.get("image") or "").lower()
+
+
+def _install_shim(lab: dict) -> bool:
+    """Copy the shim into the lab folder (binds can only come from there). False if the image has none."""
+    if not SHIM.is_file():
+        return False
+    from . import labs
+    dst = labs.workdir(lab) / SHIM_BIND
+    try:
+        if not dst.is_file() or dst.stat().st_size != SHIM.stat().st_size or dst.stat().st_mtime < SHIM.stat().st_mtime:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(SHIM, dst)
+        return True
+    except OSError:
+        return False
+
+
 def harden(lab: dict, nid: str, spec: dict, owner: str) -> tuple[dict, list[str]]:
     """Turn a containerlab node spec into its sandboxed form. Returns (spec, sysctls to set from outside)."""
     spec = {k: v for k, v in spec.items() if k not in DROP_KEYS}
@@ -91,6 +119,9 @@ def harden(lab: dict, nid: str, spec: dict, owner: str) -> tuple[dict, list[str]
     spec["sysctls"] = {"net.ipv4.ip_forward": 1}
     env = dict(spec.get("env") or {})
     env["PATCHYARD_PROXY"] = proxy_url(lab)
+    if _is_frr(spec) and _install_shim(lab):
+        env["LD_PRELOAD"] = SHIM_PATH
+        spec["binds"] = list(spec.get("binds") or []) + [f"{SHIM_BIND}:{SHIM_PATH}:ro"]
     spec["env"] = env
     q = users.quota(owner)
     if q.get("device_memory_mb"):
