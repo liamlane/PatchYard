@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.16.3
+- **Faster self-test:** after a short head start (10–15 s) the checks run every 10 s until they all pass, instead of a fixed 40–60 s wait. A healthy OSPF triangle finishes in well under a minute.
+- **Self-test covers the ISP and Internet devices** (`--full`): pc1 on DHCP broadband, r1 set up with *Configure for me*, isp1 peering with inet1 over BGP, and checks for the DHCP lease, ping to 8.8.8.8, www.example.com and whatismyip showing the ISP address.
+- **OSPF passive interfaces in the FRR 10 form:** templates and IOS imports now write `ip ospf passive` on the interface instead of `passive-interface` under `router ospf`, which FRR 10 reports as deprecated. The IOS CLI's `show running-config` lists them under `router ospf 1` as `passive-interface …`, like IOS, so the built-in *Finish the OSPF triangle* challenge sees passive interfaces however they were configured (it used to miss ones set from the IOS CLI).
+
 ## 0.16.2
 - **Fixed: routers didn't route on a sandboxed (public) server.** FRR's daemons (zebra, ospfd, bgpd, mgmtd, isisd, bfdd) ask for `CAP_SYS_ADMIN` when they start and exit without it ("privs_init: initial cap_set_proc failed"), and sandboxed devices deliberately don't get it. Routers came up with no addresses and no routing; only ldpd and staticd ran. A small preloaded library (`capshim`) now trims FRR's request to the capabilities the container has, so the daemons start without weakening the sandbox. Affects routers, ISP and Internet devices. Redeploy labs that were deployed on a sandboxed server to pick it up. Private (non-sandboxed) installs weren't affected.
 

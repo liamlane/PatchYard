@@ -2584,8 +2584,16 @@ def ios_config(s, frr_text: str, iface=None) -> str:
     out, section = [], None
     lines = frr_text.splitlines()
     host = s.host
+    cur_if, passive = None, []           # FRR keeps "ip ospf passive" per interface; IOS shows it under router ospf
     for ln in lines:
         st = ln.strip()
+        if ln.startswith("interface "):
+            cur_if = st.split()[1]
+        elif ln and not ln.startswith(" "):
+            cur_if = None
+        if cur_if and st == "ip ospf passive":
+            passive.append(cur_if)
+            continue
         if not st or st.startswith(("Building configuration", "Current configuration", "frr version", "frr defaults",
                                     "service integrated-vtysh-config", "log syslog", "no ipv6 forwarding", "ip forwarding", "no ip forwarding")):
             continue
@@ -2625,6 +2633,13 @@ def ios_config(s, frr_text: str, iface=None) -> str:
         if m:
             ln = f"{m.group(1)}bandwidth {int(m.group(2)) * 1000}"
         out.append(ln)
+    if passive:
+        at = next((i for i, l in enumerate(out) if l.startswith("router ospf")), None)
+        if at is not None:
+            at += 1
+            while at < len(out) and re.match(r"^\s+router-id ", out[at]):
+                at += 1
+            out[at:at] = [f" passive-interface {x}" for x in passive]
     out = _with_l3(s, out)
     text = s.tr_out("\n".join(out))
     if iface:

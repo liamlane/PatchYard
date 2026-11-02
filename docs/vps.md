@@ -191,13 +191,13 @@ The log is `/opt/patchyard/security.log` (rotated at 5 MB); bans are in `/opt/pa
 After installing or updating, run the self-test. It deploys real labs through the API, waits for routing and services, checks them, and cleans up:
 
 ```bash
-sudo docker exec patchyard python -m app.selftest          # OSPF triangle, about 2 minutes
-sudo docker exec patchyard python -m app.selftest --full   # also the small office: firewall, DHCP, DNS, web, PAT
+sudo docker exec patchyard python -m app.selftest          # OSPF triangle, under a minute
+sudo docker exec patchyard python -m app.selftest --full   # also the small office (firewall, DHCP, DNS, web, PAT) and ISP/Internet devices
 sudo docker exec patchyard python -m app.selftest --keep   # leave the test labs running to look at
 sudo docker exec patchyard python -m app.selftest --quick  # give up on failing checks after 90 s, not 4 minutes
 ```
 
-Every line should be a ✓. On a `--public` server it also checks the lab egress firewall and the package proxy. Each phase prints its progress and the elapsed time. Failing checks are retried every 15 s for up to 4 minutes, so a broken lab takes longer than a healthy one. When something fails, the self-test prints diagnostics for the failing devices (privileges, processes, addresses, FRR files and their log): paste those when reporting a problem.
+Every line should be a ✓. On a `--public` server it also checks the lab egress firewall and the package proxy. Each phase prints its progress and the elapsed time. The checks run every 10 s from a few seconds after deploy until they pass, so a healthy lab finishes as soon as it's ready; failing ones are retried for up to 4 minutes (90 s with `--quick`), so a broken lab takes longer. When something fails, the self-test prints diagnostics for the failing devices (privileges, processes, addresses, FRR files and their log): paste those when reporting a problem.
 
 ## How the sandbox works
 

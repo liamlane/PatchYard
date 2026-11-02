@@ -1,14 +1,15 @@
 """Release self-test: deploy real labs on this server, check they work, clean up.
 
     sudo docker exec patchyard python -m app.selftest            # OSPF triangle (5 devices, ~2 min)
-    sudo docker exec patchyard python -m app.selftest --full     # + small office (firewall, DHCP, DNS, web, PAT)
+    sudo docker exec patchyard python -m app.selftest --full     # + small office (firewall, DHCP, DNS, web, PAT) and ISP/Internet devices
     sudo docker exec patchyard python -m app.selftest --keep     # leave the labs running to look at
     sudo docker exec patchyard python -m app.selftest --quick    # retry failing checks for 90 s instead of 4 min
 
-Every phase prints progress with the elapsed time. A healthy run takes about 2 minutes: deploy,
-40 s for OSPF to converge, then the checks (they pass on the first or second attempt). Checks that
-keep failing are retried every 15 s for up to 4 minutes, which is why a broken lab takes longer;
-the failing devices' permissions, processes, addresses and logs are printed at the end.
+Every phase prints progress with the elapsed time. After a short head start the checks run every
+10 s until they all pass, so a healthy lab finishes as soon as it's ready (about 30 s for the OSPF
+triangle). Checks that keep failing are retried for up to 4 minutes (90 s with --quick), which is
+why a broken lab takes longer; the failing devices' permissions, processes, addresses and logs are
+printed at the end.
 
 It talks to the running app over HTTP on localhost as the first admin, so it exercises
 everything a user would: templates, deploy (sandboxed on a --public server), FRR, package
@@ -136,13 +137,17 @@ def diagnose(lab: str, nodes: list[str]):
             print(f"    log | {ln[:200]}")
 
 
-def run_lab(c: Client, tid: str, checks: list[dict], settle: int, keep: bool, retry: int = 240):
+def run_lab(c: Client, tid: str, checks: list[dict], settle: int, keep: bool, retry: int = 240, build=None, after_up=None):
+    """build(c, name) makes the lab (default: from template tid); after_up(c, name) runs once every device is up."""
     name = f"selftest-{tid}-{int(time.time()) % 100000}"
     print(f"\n{tid} → {name}")
-    ok = step("create from template", lambda: c.call("POST", f"/api/templates/{tid}", {"name": name}) and "")
+    if build:
+        ok = step("create lab", lambda: build(c, name) or "")
+    else:
+        ok = step("create from template", lambda: c.call("POST", f"/api/templates/{tid}", {"name": name}) and "")
     if not ok:
         return
-    say(f"{tid}: create → deploy → wait for devices → settle {settle}s → checks (retried for up to {retry}s) → destroy")
+    say(f"{tid}: create → deploy → wait for devices → {settle}s head start → checks every 10s until they pass (up to {retry}s) → destroy")
     try:
         lab = c.call("GET", f"/api/labs/{name}")
         lab["challenge"] = {"title": "self-test", "instructions": "", "feedback": "full", "checks": checks}
@@ -168,11 +173,14 @@ def run_lab(c: Client, tid: str, checks: list[dict], settle: int, keep: bool, re
             bad = {k: v for k, v in states.items() if (v.get("state") if isinstance(v, dict) else v) != "running"}
             return False if bad else f"{len(states)} devices running"
         step("every device running", lambda: wait(running, 180, what="devices up", progress=lambda: f"{seen['n']}/{want} running"), tick=False)
+        if after_up:
+            step("set up", lambda: after_up(c, name))
 
-        # routing needs about 40 s (OSPF dead interval); services need their packages installed first
-        for left in range(settle, 0, -10):
-            say(f"letting routing and services settle: {left}s left")
-            time.sleep(min(10, left))
+        # a short head start, then the checks run every 10 s until they all pass: a healthy lab is
+        # usually ready in 15-30 s (OSPF adjacencies, packages installing on servers)
+        if settle:
+            say(f"giving routing and services a {settle}s head start")
+            time.sleep(settle)
         last = {}
         tries = {"n": 0}
 
@@ -188,7 +196,7 @@ def run_lab(c: Client, tid: str, checks: list[dict], settle: int, keep: bool, re
                 + (f" · waiting on: {'; '.join(bad[:3])}{' …' if len(bad) > 3 else ''}" if bad else ""))
             return r if r["pct"] == 100 else False
         try:
-            wait(scored, retry, every=15, what="every check to pass")
+            wait(scored, retry, every=10, what="every check to pass")
         except Fail:
             say(f"gave up after {retry}s of retries")
         for r in last.get("results", []):
@@ -205,6 +213,43 @@ def run_lab(c: Client, tid: str, checks: list[dict], settle: int, keep: bool, re
             step("delete", lambda: c.call("DELETE", f"/api/labs/{name}") and "")
         else:
             print(f"  {DIM}kept: {name}{END}")
+
+
+ISP_LAB = {
+    "nodes": [{"id": "inet1", "type": "internet", "x": 300, "y": 0, "props": {"asn": "64496", "pool": "203.0.113.0/24"}},
+              {"id": "isp1", "type": "isp", "x": 300, "y": 150, "props": {"asn": "64501", "pool": "81.10.0.0/16", "ports": {"eth1": {"mode": "dhcp"}}}},
+              {"id": "pc1", "type": "pc", "x": 150, "y": 300, "props": {"ip_mode": "dhcp"}},
+              {"id": "r1", "type": "router", "x": 450, "y": 300, "props": {"chassis": "router-2s"}}],
+    "links": [{"id": "l1", "a": "pc1", "a_if": "eth1", "b": "isp1", "b_if": "eth1"},
+              {"id": "l2", "a": "r1", "a_if": "eth1", "b": "isp1", "b_if": "eth2"},
+              {"id": "l3", "a": "isp1", "a_if": "eth3", "b": "inet1", "b_if": "eth1"}],
+}
+ISP_CHECKS = [
+    {"type": "bgp_up", "node": "isp1", "count": 1, "label": "isp1 peers with inet1 over BGP"},
+    {"type": "dhcp", "node": "pc1", "subnet": "81.10.0.8/29", "label": "pc1 got a broadband address from isp1"},
+    {"type": "ping", "node": "pc1", "target": "8.8.8.8", "label": "pc1 can ping 8.8.8.8 (on inet1)"},
+    {"type": "http", "node": "pc1", "url": "http://www.example.com", "match": "www.example.com", "label": "pc1 can open www.example.com"},
+    {"type": "http", "node": "pc1", "url": "http://whatismyip.example.com", "match": "81.10.0.", "label": "whatismyip shows pc1's ISP address"},
+    {"type": "route", "node": "r1", "prefix": "0.0.0.0/0", "protocol": "static", "label": "r1 has a default route to isp1 (Configure for me)"},
+    {"type": "ping", "node": "r1", "target": "1.1.1.1", "label": "r1 can ping 1.1.1.1"},
+]
+
+
+def _build_isp(c, name):
+    c.call("POST", "/api/labs", {"name": name})
+    lab = c.call("GET", f"/api/labs/{name}")
+    lab.update(ISP_LAB)
+    c.call("PUT", f"/api/labs/{name}", lab)
+    return "pc1 on DHCP, r1 on a static /30, isp1 peering with inet1"
+
+
+def _configure_r1(c, name):
+    def go():
+        r = c.call("POST", f"/api/labs/{name}/nodes/isp1/isp/configure", {"port": "eth2"})
+        if not r.get("ok"):
+            raise Fail("; ".join(r.get("errors") or ["failed"]))
+        return "r1 configured from the ISP's port page"
+    return wait(go, 60, every=5, what="r1's CLI to accept the ISP settings")
 
 
 def main(argv):
@@ -241,7 +286,7 @@ def main(argv):
         {"type": "service", "node": "srv1", "service": "http"}, {"type": "service", "node": "srv1", "service": "dns"},
         {"type": "ping", "node": "pc1", "target": "192.168.3.10"},
         {"type": "http", "node": "pc1", "url": "http://www.lab", "match": "www.lab"},
-    ], settle=40, keep=keep, retry=retry)
+    ], settle=10, keep=keep, retry=retry)
     if full:
         run_lab(c, "small-office", [
             {"type": "service", "node": "srv1", "service": s} for s in ("dhcp", "dns", "http", "ftp", "tftp", "syslog", "ntp")
@@ -250,7 +295,8 @@ def main(argv):
             {"type": "http", "node": "pc1", "url": "http://intranet.office.lab", "match": "intranet"},
             {"type": "http", "node": "pc2", "url": "http://www.example.net", "match": "example"},
             {"type": "ping", "node": "pc1", "target": "198.51.100.10"},
-        ], settle=60, keep=keep, retry=retry)
+        ], settle=15, keep=keep, retry=retry)
+        run_lab(c, "isp-internet", ISP_CHECKS, settle=15, keep=keep, retry=retry, build=_build_isp, after_up=_configure_r1)
     bad = [r for r in RESULTS if not r[0]]
     t = int(time.time() - T0)
     print(f"\n{GREEN if not bad else RED}{len(RESULTS) - len(bad)}/{len(RESULTS)} passed{END} {DIM}in {t // 60}m {t % 60:02d}s{END}")

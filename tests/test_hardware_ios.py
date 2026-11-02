@@ -112,6 +112,16 @@ end
     assert "frr version" not in out and "\nexit" not in out
 
 
+def test_ospf_passive_shown_ios_style():
+    """FRR 10 keeps 'ip ospf passive' per interface; the IOS view lists it under router ospf like IOS does."""
+    frr = "hostname r1\n!\ninterface eth1\n ip address 10.0.0.1/30\n ip ospf passive\nexit\n!\ninterface lo\n ip ospf passive\nexit\n!\nrouter ospf\n ospf router-id 1.1.1.1\n network 10.0.0.0/30 area 0\nexit\n!\nend\n"
+    out = ios.ios_config(_S(), frr)
+    lines = out.splitlines()
+    i = lines.index("router ospf 1")
+    assert lines[i + 1] == " router-id 1.1.1.1" and lines[i + 2] == " passive-interface GigabitEthernet0/0/0" and lines[i + 3] == " passive-interface Loopback0"
+    assert "ip ospf passive" not in out
+
+
 def test_server_side_props_win_over_stale_autosave(client):
     client.post("/api/labs", json={"name": "t-rev"})
     lab = labs.load("t-rev")

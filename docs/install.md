@@ -90,9 +90,10 @@ This pulls the newest image and restarts the container. Running labs keep runnin
 ## Check it works
 
 ```bash
-sudo docker exec patchyard python -m app.selftest          # OSPF triangle: about 2 minutes
-sudo docker exec patchyard python -m app.selftest --full   # also the small office (firewall, DHCP, DNS, web, PAT)
+sudo docker exec patchyard python -m app.selftest          # OSPF triangle: under a minute
+sudo docker exec patchyard python -m app.selftest --full   # also the small office (firewall, DHCP, DNS, web, PAT) and ISP/Internet devices
 sudo docker exec patchyard python -m app.selftest --keep   # leave the test labs running to look at
+sudo docker exec patchyard python -m app.selftest --quick  # give up on failing checks after 90 s, not 4 minutes
 ```
 
 The self-test talks to the running app as the first admin. It creates labs from templates, deploys them, waits for OSPF, services and pings, checks them with the same engine as [challenges](challenges.md), then destroys and deletes them. On a server installed with `--public` it also checks the lab egress firewall and the package proxy. Every line should be a ✓, and the exit code is 0 when everything passed.

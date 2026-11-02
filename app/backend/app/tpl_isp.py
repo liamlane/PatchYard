@@ -139,9 +139,12 @@ route-map RM-INET-OUT permit 10
  match ip address prefix-list PL-AGG
 exit
 !
+interface lo
+ ip ospf passive
+exit
+!
 router ospf
  ospf router-id {lo[c]}
- passive-interface lo
 {ospf_nets}exit
 !
 mpls ldp
@@ -232,9 +235,12 @@ route-map RM-{vrf}-OUT permit 10
  match ip address prefix-list PL-DEFAULT
 exit
 !
+interface lo
+ ip ospf passive
+exit
+!
 router ospf
  ospf router-id {pelo[t]}
- passive-interface lo
  network {pelo[t]}/32 area 0
  network {net1}/30 area 0
  network {net2}/30 area 0

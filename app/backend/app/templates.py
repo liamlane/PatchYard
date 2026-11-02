@@ -8,7 +8,8 @@ def _frr(name, lo, ifaces, ospf_nets, passive=("lo",), extra=""):
     t = f"frr defaults traditional\nhostname {name}\n!\ninterface lo\n ip address {lo}/32\nexit\n!\n"
     for ifn, ip, desc, p2p in ifaces:
         t += f"interface {ifn}\n description {desc}\n ip address {ip}\n" + (" ip ospf network point-to-point\n" if p2p else "") + "exit\n!\n"
-    t += f"router ospf\n ospf router-id {lo}\n" + "".join(f" passive-interface {p}\n" for p in passive)
+    t += "".join(f"interface {p}\n ip ospf passive\nexit\n!\n" for p in passive)      # FRR 10: per interface
+    t += f"router ospf\n ospf router-id {lo}\n"
     t += "".join(f" network {n} area 0\n" for n in ospf_nets) + "exit\n!\n" + extra
     return t
 
@@ -192,7 +193,8 @@ def _rtr(name, lo, ifaces, nets=(), passive=("lo",), ospf_extra=(), extra="", lo
                 t += f" bandwidth {o[3:]}\n"
         t += "exit\n!\n"
     if nets:
-        t += f"router ospf\n ospf router-id {lo}\n" + "".join(f" passive-interface {x}\n" for x in passive)
+        t += "".join(f"interface {x}\n ip ospf passive\nexit\n!\n" for x in passive)
+        t += f"router ospf\n ospf router-id {lo}\n"
         t += f" network {lo}/32 area {lo_area}\n" + "".join(f" network {n} area {a}\n" for n, a in nets)
         t += "".join(f" {x}\n" for x in ospf_extra) + "exit\n!\n"
     return t + extra

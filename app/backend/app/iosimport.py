@@ -391,12 +391,13 @@ def _frr(d: dict, port) -> str:
         L += ["!", "router ospf"] + ([f" ospf router-id {o['rid']}"] if o["rid"] else [])
         if o["passive_default"]:
             L.append(" passive-interface default")
+        per_if = []
         for p in o["passive"]:
             neg = p.startswith("no ")
             nm = p[3:] if neg else p
             ifn = "lo" if nm.lower() in ("loopback0", "lo0") else port(nm) if not nm.lower().startswith("loopback") else f"loop{int(re.sub(r'\\D', '', nm))}"
-            L.append(f" {'no ' if neg else ''}passive-interface {ifn}")
-        L += [f" network {n} area {a}" for n, a in o["networks"]] + ["exit"]
+            per_if.append(f"interface {ifn}\n {'no ' if neg else ''}ip ospf passive\nexit")   # FRR 10: per interface
+        L += [f" network {n} area {a}" for n, a in o["networks"]] + ["exit"] + per_if
     if d["bgp"]:
         b = d["bgp"]
         L += ["!", f"router bgp {b['asn']}"] + ([f" bgp router-id {b['rid']}"] if b["rid"] else []) + [" no bgp ebgp-requires-policy"]
