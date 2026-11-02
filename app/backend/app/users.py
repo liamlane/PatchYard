@@ -138,7 +138,7 @@ def any_users() -> bool:
 
 
 def public(name: str, u: dict) -> dict:
-    return {"name": name, "full_name": u.get("full_name", ""), "email": u.get("email", ""), "role": u.get("role", "user"), "created": u.get("created"), "last_login": u.get("last_login"),
+    return {"demo": bool(u.get("demo")), "name": name, "full_name": u.get("full_name", ""), "email": u.get("email", ""), "role": u.get("role", "user"), "created": u.get("created"), "last_login": u.get("last_login"),
             "disabled": bool(u.get("disabled")), "internet": bool(u.get("internet")), "quota": u.get("quota") or {},
             "alert_email": bool(u.get("alert_email")), "two_factor": bool((u.get("totp") or {}).get("secret")),
             "recovery_left": len(u.get("recovery") or []), "ntfy_topic": u.get("ntfy_topic", ""), "tokens": len(u.get("tokens") or {})}
@@ -274,6 +274,9 @@ DEFAULT_QUOTA = {"max_labs": 5, "max_running_labs": 1, "max_devices": 20, "devic
 def quota(name: str) -> dict:
     """Effective limits for a user (0 = unlimited). Admins are unlimited."""
     u = get(name) or {}
+    if u.get("demo"):                                     # demo sessions: the demo limits, nothing else
+        dq = settings.get("demo.quota", {}) or {}
+        return {k: dq.get(k, DEFAULT_QUOTA.get(k, 0)) for k in QUOTA_KEYS}
     if u.get("role") == "admin" or not any_users():        # admins, and open single-user installs
         return {k: 0 for k in QUOTA_KEYS}
     base = {**DEFAULT_QUOTA, **(settings.get("users.quota", {}) or {})}   # settings first, then per-user overrides
@@ -626,3 +629,41 @@ def token_user(token: str) -> dict | None:
                         _save(d)
             return {"name": n, "role": u.get("role", "user"), "via": "token"}
     return None
+
+
+# ------------------------------------------------------------------ demo sessions
+
+class DemoFull(UserError):
+    pass
+
+
+def demo_users() -> dict:
+    return {n: u for n, u in all_users().items() if u.get("demo")}
+
+
+def create_demo(ip: str = "") -> str:
+    """A throwaway account for one demo visitor: random name, no usable password, demo limits."""
+    with _LOCK:
+        d = _load()
+        live = [n for n, u in d["users"].items() if u.get("demo")]
+        if len(live) >= int(settings.get("demo.max_sessions", 5)):
+            raise DemoFull("the demo is full right now: try again in a few minutes")
+        for _ in range(20):
+            name = "demo-" + secrets.token_hex(2)
+            if name not in d["users"]:
+                break
+        else:
+            raise UserError("couldn't start a demo session")
+        d["users"][name] = {"hash": _hash(secrets.token_urlsafe(24)), "role": "user", "created": time.time(), "gen": 1,
+                            "internet": False, "quota": {}, "full_name": "Demo visitor", "email": "", "demo": True,
+                            "demo_ip": ip, "last_login": time.time()}
+        _save(d)
+        return name
+
+
+def delete_demo(name: str):
+    with _LOCK:
+        d = _load()
+        if (d["users"].get(name) or {}).get("demo"):
+            del d["users"][name]
+            _save(d)

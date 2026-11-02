@@ -120,7 +120,7 @@ function Workspace() {
   }, []);
   const refreshLabs = useCallback(() => api.labs().then(setLabs).catch((e) => notify(e.message, null, "bad")), [notify]);
   useEffect(() => {
-    api.authState().then((a) => { setMe(a.user); setAuth({ checked: true, need: a.enabled && !a.logged_in, user: a.user, multi: a.multi_user, requests: a.requests, forgot: a.forgot }); })
+    api.authState().then((a) => { setMe(a.user); setAuth({ checked: true, need: a.enabled && !a.logged_in, user: a.user, multi: a.multi_user, requests: a.requests, forgot: a.forgot, demo: a.demo }); })
       .catch(() => setAuth({ checked: true, need: false, user: null }));
     const h = () => setAuth((x) => ({ ...x, checked: true, need: true }));
     const h2 = () => api.authState().then((a) => { setMe(a.user); setAuth((x) => ({ ...x, user: a.user })); }).catch(() => {});
@@ -692,8 +692,8 @@ function Workspace() {
   if (invite) return <InvitePage token={invite[1]} />;
   const reset = location.pathname.match(/^\/reset\/([\w-]+)$/);
   if (reset) return <ResetPage token={reset[1]} />;
-  if (auth.need) return <><Login canRequest={auth.requests} canForgot={auth.forgot} onDone={(info) => { history.replaceState(null, "", "/");
-    if (info?.recovery_left != null) setTimeout(() => notify(`Signed in with a recovery code: ${info.recovery_left} left`, "Make new ones in Account and password if you're running low.", "warn"), 800); api.authState().then((a) => { setMe(a.user); setAuth({ checked: true, need: false, user: a.user, multi: a.multi_user, requests: a.requests, forgot: a.forgot }); }); }} /><Toasts items={toasts} onClose={(id) => setToasts((x) => x.filter((t) => t.id !== id))} /></>;
+  if (auth.need) return <><Login canRequest={auth.requests} canForgot={auth.forgot} demo={auth.demo} onDone={(info) => { history.replaceState(null, "", "/");
+    if (info?.recovery_left != null) setTimeout(() => notify(`Signed in with a recovery code: ${info.recovery_left} left`, "Make new ones in Account and password if you're running low.", "warn"), 800); api.authState().then((a) => { setMe(a.user); setAuth({ checked: true, need: false, user: a.user, multi: a.multi_user, requests: a.requests, forgot: a.forgot, demo: a.demo }); }); }} /><Toasts items={toasts} onClose={(id) => setToasts((x) => x.filter((t) => t.id !== id))} /></>;
   const me = auth.user;
   if (!auth.need && me?.must_setup_2fa) return <Require2FA me={me} onDone={() => api.authState().then((a) => { setMe(a.user); setAuth((x) => ({ ...x, user: a.user })); })} />;
   return (
@@ -751,12 +751,14 @@ function Workspace() {
               <div className="hint">Signed in as <b>{me.full_name || me.name}</b>{me.full_name ? ` (${me.name})` : ""}{me.role === "admin" ? " · admin" : ""}</div>
               {me.role === "admin" && <button role="menuitem" onClick={() => { setAcct(false); setAdmin("users"); }}><Icon name="grid" size={15} /> Admin: users, invites, labs</button>}
               {me.role === "admin" && alertSum?.requests > 0 && <button role="menuitem" onClick={() => { setAcct(false); setAdmin("requests"); }}><Icon name="flag" size={15} /> Account requests <span className="badge inline">{alertSum.requests}</span></button>}
-              <button role="menuitem" onClick={() => { setAcct(false); setSettingsTab("security"); }}><Icon name="keyboard" size={15} /> Account and password</button>
+              {me.demo ? <div className="hint demo-note">Demo session: everything is deleted when you sign out, after {auth.demo?.idle_minutes || 20} idle minutes, or at {new Date(me.demo_ends * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}.</div>
+                : <button role="menuitem" onClick={() => { setAcct(false); setSettingsTab("security"); }}><Icon name="keyboard" size={15} /> Account and password</button>}
               <button role="menuitem" onClick={() => { setAcct(false); setHelp("start"); }}><Icon name="help" size={15} /> Help & how-to guide</button>
-              <button role="menuitem" onClick={async () => { await api.logout(); location.href = "/"; }}><Icon name="x" size={15} /> Sign out</button>
+              <button role="menuitem" onClick={async () => { await api.logout(); location.href = "/"; }}><Icon name="x" size={15} /> {me.demo ? "End the demo (deletes your labs)" : "Sign out"}</button>
             </AccountMenu>}
           </div>)}
       </header>
+      {me?.demo && <DemoBar me={me} demo={auth.demo} />}
 
       <aside className="palette" aria-label="Devices and tools">
         <h3>Devices</h3>
@@ -947,4 +949,17 @@ function AccountMenu({ anchor, onClose, children }) {
   }, [anchor, onClose]);
   if (!pos) return null;
   return createPortal(<div ref={ref} className="acct-menu" role="menu" style={{ top: pos.top, right: pos.right }}>{children}</div>, document.body);
+}
+
+// Demo sessions: a reminder that nothing is kept, with the time left.
+function DemoBar({ me, demo }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => { const t = setInterval(() => setNow(Date.now()), 15000); return () => clearInterval(t); }, []);
+  const left = Math.max(0, Math.round((me.demo_ends * 1000 - now) / 60000));
+  return (
+    <div className="demo-bar" role="status">
+      <b>Demo</b> · {left} min left · deleted when you sign out or after {demo?.idle_minutes || 20} idle min
+      {demo && <> · <a href="/request-account" onClick={async (e) => { e.preventDefault(); await api.logout(); location.href = "/request-account"; }}>Request an account</a> to keep your work</>}
+    </div>
+  );
 }

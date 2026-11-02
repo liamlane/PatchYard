@@ -10,7 +10,7 @@ A self-hosted network lab that looks and feels like Packet Tracer but runs real 
 
 You build, configure, break and watch it all from a browser, with an IOS-style CLI on every router and switch.
 
-**Try it:** a public Patchyard server runs at **[patchyard.fastlanetechnology.co.uk](https://patchyard.fastlanetechnology.co.uk)**. Accounts are approved by hand: use **Request one** on the sign-in page, and you'll hear back once it's approved.
+**Try it:** a public Patchyard server runs at **[patchyard.fastlanetechnology.co.uk](https://patchyard.fastlanetechnology.co.uk)**. Press **Try the demo** on the sign-in page for a private session that's deleted when you leave, or use **Request one** for an account of your own (approved by hand).
 
 ![A dual-ISP MPLS L3VPN lab on the Patchyard canvas](docs/images/screen-canvas-dual-isp.png)
 
@@ -133,6 +133,8 @@ A Services tab with a page per service, each with an On/Off switch and a running
 - **Alert channels:** phone push (ntfy), Microsoft Teams, Slack and webhooks, with quiet hours.
 - **Audit log** and a **disk allowance** per user.
 - **Idle labs** can be stopped automatically to keep memory free.
+- **A public demo:** a demo login many people can use at once, each in a private throwaway session that's deleted when they leave.
+- **Brute-force protection:** a security log, automatic IP bans that escalate, manual bans and an allowlist.
 
 ### Manage
 
@@ -198,6 +200,8 @@ A Services tab with a page per service, each with an On/Off switch and a running
 | Admin: default limits, idle-lab auto-stop, two-factor policy, sandbox | Admin: audit log of sign-ins, accounts, tokens, settings and labs |
 | ![Admin, Email](docs/images/screen-admin-email.png) | ![API tokens](docs/images/screen-tokens.png) |
 | Admin: SMTP with presets, what to send, Save and send test | API tokens for scripts and CI |
+| ![Admin, Security](docs/images/screen-admin-security.png) | ![Sign-in page with the demo](docs/images/screen-demo-login.png) |
+| Admin: security log, automatic and manual bans, allowlist | A public demo: one login, a private throwaway session each |
 
 ![Lab manager templates](docs/images/screen-lab-manager.png)
 
@@ -234,7 +238,7 @@ The full walk-through is in [docs/architecture.md](docs/architecture.md).
 | Guide | What's in it |
 | --- | --- |
 | [docs/install.md](docs/install.md) | Installing on any Linux host, options, updating, troubleshooting |
-| [docs/vps.md](docs/vps.md) | Hosting for other people: HTTPS, accounts, email, sandbox, self-test, backups |
+| [docs/vps.md](docs/vps.md) | Hosting for other people: HTTPS, accounts, email, a public demo, brute-force protection, sandbox, self-test, backups |
 | [docs/proxmox.md](docs/proxmox.md) | Running it in a Proxmox VM |
 | [docs/internet-and-testing.md](docs/internet-and-testing.md) | ISP and Internet devices, Explain a path, tickets, failover tests, change rehearsal, VoIP, imports, API tokens |
 | [docs/challenges.md](docs/challenges.md) | Playing and writing challenges, every check type, network tests |

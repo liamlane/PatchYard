@@ -102,7 +102,7 @@ export function TrafficPanel({ lab, states, onClose, notify, preset }) {
 
 const BRAND = <div className="brand"><svg width="26" height="26" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="3" /><circle cx="19" cy="5" r="3" /><circle cx="19" cy="19" r="3" /><path d="M7.6 10.6l8.8-4.2M7.6 13.4l8.8 4.2" /></svg>Patchyard</div>;
 
-export function Login({ onDone, canRequest, canForgot }) {
+export function Login({ onDone, canRequest, canForgot, demo }) {
   const [mode, setMode] = useState(() => (canRequest && location.pathname === "/request-account" ? "request" : "signin"));
   const [user, setUser] = useState("");
   const [pw, setPw] = useState("");
@@ -128,6 +128,15 @@ export function Login({ onDone, canRequest, canForgot }) {
         {err && <p className="error">{err}</p>}
         <button className="primary big" disabled={busy || !pw}>Sign in</button>
         {canForgot && <p className="hint"><button type="button" className="link" onClick={() => setMode("forgot")}>Forgot your password?</button></p>}
+        {demo && <div className="demo-box">
+          <p><b>Just looking?</b> Try the demo: press the button, or sign in as <code>{demo.username}</code> with password <code>{demo.password}</code>.</p>
+          <p className="hint">You get a private session with the full app. Everything you build is deleted when you sign out, after {demo.idle_minutes} idle minutes, or after {demo.minutes} minutes.</p>
+          <button type="button" className="primary" disabled={busy || demo.full} onClick={async () => {
+            setBusy(true); setErr("");
+            try { await api.demo(); onDone(); } catch (x) { setErr(x.message); }
+            setBusy(false);
+          }}>{demo.full ? "The demo is full: try again in a few minutes" : "Try the demo"}</button>
+        </div>}
         {canRequest
           ? <p className="hint">No account? <button type="button" className="link" onClick={() => { setMode("request"); history.replaceState(null, "", "/request-account"); }}>Request one</button>, or use an invite link if you were sent one.</p>
           : <p className="hint">No account? Ask whoever runs this server for an invite link.</p>}

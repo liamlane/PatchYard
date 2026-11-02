@@ -14,7 +14,7 @@ function Field({ label, hint, children }) {
 }
 
 export default function Settings({ onClose, notify, labs, lab, appearance, onSaved, initial = "general", me }) {
-  const [tab, setTab] = useState(initial);
+  const [tabSel, setTab] = useState(initial);
   const [s, setS] = useState(null);
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -22,8 +22,9 @@ export default function Settings({ onClose, notify, labs, lab, appearance, onSav
   if (!s) return <Modal title="Settings" onClose={onClose} wide><p className="hint">Loading…</p></Modal>;
   const meta = s._meta || {};
   const admin = meta.admin !== false;
-  const tabs = admin ? TABS : USER_TABS;
-  if (!tabs.some(([k]) => k === tab)) setTab(tabs[0][0]);
+  const tabs = (admin ? TABS : USER_TABS).filter(([k]) => !(me?.demo && k === "security"));
+  // a tab this user doesn't have (users and demo visitors open Settings on General): show their first one instead
+  const tab = tabs.some(([k]) => k === tabSel) ? tabSel : tabs[0][0];
   const upd = (sec, k, v) => { setS({ ...s, [sec]: { ...s[sec], [k]: v } }); setDirty(true); };
   const rules = s.alerts?.rules || [];
   const setRule = (i, k, v) => { const r = rules.map((x, j) => (j === i ? { ...x, [k]: v } : x)); upd("alerts", "rules", r); };

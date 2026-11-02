@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "./api.js";
 import { Modal, Icon } from "./ui.jsx";
 
-const TABS = [["users", "Users", "grid"], ["requests", "Requests", "flag"], ["invites", "Invites", "plus"], ["labs", "All labs", "layers"], ["limits", "Limits & sandbox", "gear"], ["email", "Email", "bell"], ["channels", "Alert channels", "zap"], ["audit", "Audit log", "diff"]];
+const TABS = [["users", "Users", "grid"], ["requests", "Requests", "flag"], ["invites", "Invites", "plus"], ["labs", "All labs", "layers"], ["limits", "Limits & sandbox", "gear"], ["email", "Email", "bell"], ["channels", "Alert channels", "zap"], ["security", "Security", "flag"], ["audit", "Audit log", "diff"]];
 const QK = [["max_labs", "Labs"], ["max_running_labs", "Running at once"], ["max_devices", "Devices per lab"], ["device_memory_mb", "Memory per device (MB)"], ["device_cpus", "CPUs per device"], ["max_disk_mb", "Disk (MB)"]];
 const ago = (t) => (!t ? "never" : (() => { const s = Date.now() / 1000 - t; return s < 120 ? "just now" : s < 7200 ? `${Math.round(s / 60)} min ago` : s < 172800 ? `${Math.round(s / 3600)} h ago` : `${Math.round(s / 86400)} days ago`; })());
 
@@ -23,6 +23,7 @@ export default function Admin({ tab = "users", onTab, onClose, notify, me, onOpe
           {tab === "limits" && <Limits notify={notify} />}
           {tab === "email" && <Email notify={notify} me={me} />}
           {tab === "channels" && <Channels notify={notify} />}
+          {tab === "security" && <Security notify={notify} />}
           {tab === "audit" && <Audit notify={notify} />}
         </div>
       </div>
@@ -48,7 +49,7 @@ function Users({ notify, me }) {
     <table className="grid compact admin-users"><thead><tr><th>User</th><th>Name and email</th><th>Role</th><th>Labs</th><th>Disk</th><th title="Two-factor sign-in">2FA</th><th>Running</th><th>Last sign-in</th><th>Lab internet</th><th /></tr></thead>
       <tbody>{list.map((u) => (
         <tr key={u.name} className={u.disabled ? "hint" : ""}>
-          <td><b>{u.name}</b>{u.name === me?.name && <span className="hint"> (you)</span>}{u.disabled && <span className="hint"> · disabled</span>}</td>
+          <td><b>{u.name}</b>{u.name === me?.name && <span className="hint"> (you)</span>}{u.disabled && <span className="hint"> · disabled</span>}{u.demo && <span className="schip s-warn"> demo</span>}</td>
           <td>{u.full_name || <span className="hint">—</span>}<br /><span className="hint">{u.email ? <a href={`mailto:${u.email}`}>{u.email}</a> : "no email"}</span></td>
           <td><select value={u.role} disabled={u.name === me?.name} onChange={(e) => patch(u.name, { role: e.target.value }, `${u.name} is now ${e.target.value === "admin" ? "an admin" : "a user"}`)}>
             <option value="user">user</option><option value="admin">admin</option></select></td>
@@ -232,6 +233,20 @@ function Limits({ notify }) {
     <p className="hint">Admins have no limits. Per-user overrides are under Users → Limits. 0 = unlimited.</p>
     <div className="formrow">{QK.map(([k, l]) => (
       <label key={k}>{l}<input className="narrow" value={q[k]} onChange={(e) => upd("users", "quota", { ...q, [k]: e.target.value.replace(/[^\d.]/g, "") })} /></label>))}</div>
+    <h3>Demo sign-in</h3>
+    <label className="chk"><input type="checkbox" checked={!!s.demo?.enabled} onChange={(e) => upd("demo", "enabled", e.target.checked)} /> Offer a demo on the sign-in page</label>
+    <p className="hint">Anyone can sign in with the demo login (it's shown on the sign-in page) or press <i>Try the demo</i>. Each visitor gets a throwaway account of their own, so many can use it at once without seeing each other's work. Their labs are destroyed and the account deleted when they sign out, go idle, or run out of time. Demo sessions can't change the account, make API tokens, import configs, or reach the internet.</p>
+    <div className="formrow">
+      <label>Username<input className="narrow2" value={s.demo?.username ?? "demo"} onChange={(e) => upd("demo", "username", e.target.value.trim().toLowerCase())} /></label>
+      <label>Password<input className="narrow2" value={s.demo?.password ?? ""} onChange={(e) => upd("demo", "password", e.target.value)} /></label>
+      <label>At once<input className="narrow" value={s.demo?.max_sessions ?? 5} onChange={(e) => upd("demo", "max_sessions", e.target.value.replace(/\D/g, ""))} /></label>
+      <label>Session (min)<input className="narrow" value={s.demo?.session_minutes ?? 60} onChange={(e) => upd("demo", "session_minutes", e.target.value.replace(/\D/g, ""))} /></label>
+      <label>Idle (min)<input className="narrow" value={s.demo?.idle_minutes ?? 20} onChange={(e) => upd("demo", "idle_minutes", e.target.value.replace(/\D/g, ""))} /></label>
+    </div>
+    <div className="formrow">{QK.map(([k, l]) => (
+      <label key={k}>{l}<input className="narrow" value={s.demo?.quota?.[k] ?? ""} onChange={(e) => upd("demo", "quota", { ...(s.demo?.quota || {}), [k]: e.target.value.replace(/[^\d.]/g, "") })} /></label>))}</div>
+    <p className="hint">Limits per demo visitor. Size them for your server: at once × running labs × devices × memory is the most demo visitors can use.</p>
+    <DemoSessions notify={notify} />
     <h3>Idle labs</h3>
     <div className="formrow"><label>Stop a lab nobody has used for<span className="nowrap"><input className="narrow" value={s.users.idle_stop_minutes ?? 0} onChange={(e) => upd("users", "idle_stop_minutes", Number(e.target.value.replace(/\D/g, "")) || 0)} /> minutes</span></label></div>
     <label className="chk"><input type="checkbox" checked={!!s.users.idle_stop_admins} onChange={(e) => upd("users", "idle_stop_admins", e.target.checked)} /> Admins' labs too</label>
@@ -354,7 +369,8 @@ function Email({ notify, me }) {
   </>);
 }
 
-const ACTIONS = { "login": "Signed in", "login.fail": "Failed sign-in", "password.change": "Changed password", "password.reset_request": "Asked for a reset link",
+const ACTIONS = { "demo.start": "Started a demo", "demo.end": "Demo ended", "security.ban": "Banned an address", "security.unban": "Lifted a ban", "lab.idle_stop": "Stopped idle lab",
+  "token.create": "Created API token", "token.revoke": "Revoked API token", "login": "Signed in", "login.fail": "Failed sign-in", "password.change": "Changed password", "password.reset_request": "Asked for a reset link",
   "password.reset": "Reset password by email", "request.new": "Requested an account", "request.approve": "Approved request", "request.decline": "Declined request",
   "invite.create": "Created invite", "invite.revoke": "Revoked invite", "invite.redeem": "Used invite", "user.create": "Created user", "user.update": "Changed user",
   "user.delete": "Deleted user", "user.reset_password": "Reset password", "user.send_reset": "Emailed reset link", "settings.change": "Changed settings",
@@ -463,5 +479,101 @@ function Channels({ notify }) {
     </div>
     <label className="chk block"><input type="checkbox" checked={c.user_ntfy} onChange={(e) => upd("user_ntfy", e.target.checked)} /> Let users get their own labs' alerts on their phone (ntfy topic in Settings → Account)</label>
     <div className="row"><span className="grow" />{dirty && <span className="hint">Unsaved changes</span>}<button disabled={!dirty} onClick={load}>Discard</button><button className="primary" disabled={!dirty} onClick={save}>Save</button></div>
+  </>);
+}
+
+function DemoSessions({ notify }) {
+  const [list, setList] = useState(null);
+  const load = () => api.adminDemo().then(setList).catch(() => setList([]));
+  useEffect(() => { load(); const t = setInterval(load, 10000); return () => clearInterval(t); }, []);
+  if (!list?.length) return <p className="hint">No demo sessions right now.</p>;
+  const ago = (t) => (t ? `${Math.max(0, Math.round((Date.now() / 1000 - t) / 60))} min ago` : "–");
+  return (
+    <table className="grid compact"><thead><tr><th>Demo session</th><th>Started</th><th>Last active</th><th>Labs</th><th>Address</th><th /></tr></thead>
+      <tbody>{list.map((d) => <tr key={d.name}><td className="mono">{d.name}</td><td>{ago(d.started)}</td><td>{ago(d.last_seen)}</td><td>{d.labs.join(", ") || "–"}</td><td className="mono">{d.ip}</td>
+        <td><button className="link danger" onClick={async () => { try { await api.adminDemoEnd(d.name); notify(`Ended ${d.name}`, null, "ok"); load(); } catch (e) { notify(e.message, null, "bad"); } }}>End</button></td></tr>)}</tbody></table>
+  );
+}
+
+const SEC_KIND = { "login.fail": "Failed sign-in", "login.throttled": "Sign-in while rate-limited", "2fa.fail": "Wrong two-factor code", "2fa.throttled": "Code guessing while rate-limited",
+  "token.invalid": "Invalid API token", "reset.invalid": "Bad reset link", "reset.throttled": "Reset link guessing", "invite.invalid": "Bad invite link", "invite.throttled": "Invite guessing",
+  "forgot.throttled": "Too many reset requests", "request.throttled": "Too many account requests", "request.bot": "Bot (hidden form field)", "demo.throttled": "Too many demo sessions",
+  "cross-site": "Cross-site request refused", "ban.auto": "Banned automatically", ban: "Banned by an admin", unban: "Ban lifted", blocked: "Blocked request" };
+const BAD = new Set(["ban.auto", "ban", "blocked", "2fa.fail", "request.bot", "token.invalid"]);
+
+function Security({ notify }) {
+  const [d, setD] = useState(null);
+  const [f, setF] = useState({ ip: "", kind: "" });
+  const [s, setS] = useState(null);
+  const [dirty, setDirty] = useState(false);
+  const [nb, setNb] = useState({ ip: "", minutes: "1440", reason: "" });
+  const load = useCallback(() => api.adminSecurity(f.ip, f.kind).then(setD).catch((e) => notify(e.message, null, "bad")), [f.ip, f.kind, notify]);
+  useEffect(() => { const t = setTimeout(load, 250); return () => clearTimeout(t); }, [load]);
+  useEffect(() => { api.settings().then(setS).catch(() => {}); }, []);
+  const sec = s?.security || {};
+  const upd = (k, v) => { setS({ ...s, security: { ...s.security, [k]: v } }); setDirty(true); };
+  const save = async () => { try { const r = await api.saveSettings(s); setS({ ...r, _meta: s._meta }); setDirty(false); notify("Saved", null, "ok"); } catch (e) { notify(e.message, null, "bad"); } };
+  const ban = async (ip, minutes, reason) => { try { await api.adminBan({ ip, minutes: minutes === "" ? null : Number(minutes), reason }); notify(`Banned ${ip}`, null, "ok"); load(); } catch (e) { notify(e.message, null, "bad"); } };
+  const unban = async (k) => { try { await api.adminUnban(k); notify(`Lifted the ban on ${k}`, null, "ok"); load(); } catch (e) { notify(e.message, null, "bad"); } };
+  const until = (b) => (!b.until ? "for good" : b.active ? `until ${new Date(b.until * 1000).toLocaleString()}` : `ended ${ago(b.until)}`);
+  const sm = d?.summary;
+  return (<>
+    <h3>Security</h3>
+    <p className="hint">Failed sign-ins, wrong two-factor codes, invalid API tokens, and reset or invite links that don't exist all count against the address they came from. Too many in a short time and the address is banned: it gets nothing from the server, the sign-in page included. Each repeat doubles the ban, up to a week.</p>
+    {sm?.proxy_problem && <p className="error">Every request seems to come from 127.0.0.1, so the reverse proxy's client address isn't getting through and automatic bans can't tell attackers apart. Patchyard never bans loopback, so nothing is blocked, but nothing is protected either: check that the proxy sends X-Forwarded-For and Patchyard runs with --proxy-headers.</p>}
+    {sm && <div className="kpis sec-kpis">
+      <div className="kpi"><div className="kpi-v">{sm.failed_logins}</div><div className="kpi-l">failed sign-ins (24 h)</div></div>
+      <div className="kpi"><div className="kpi-v">{sm.failures}</div><div className="kpi-l">failures of any kind (24 h)</div></div>
+      <div className={`kpi ${sm.active_bans ? "kpi-warn" : ""}`}><div className="kpi-v">{sm.active_bans}</div><div className="kpi-l">addresses banned now</div></div>
+      <div className="kpi"><div className="kpi-v">{sm.auto_bans}</div><div className="kpi-l">automatic bans (24 h)</div></div>
+    </div>}
+    {sm?.top?.length > 0 && <p className="hint">Most failures (24 h): {sm.top.map(([ip, n]) => <span key={ip}><button className="link mono" onClick={() => setF({ ...f, ip })}>{ip}</button> ({n}) </span>)}</p>}
+    {d?.you && <p className="hint">You're connecting from <code>{d.you}</code>. Add it (or your office range) to the allowlist so you can never lock yourself out.</p>}
+
+    <h4>Banned addresses</h4>
+    <table className="grid compact audit"><thead><tr><th>Address</th><th>State</th><th>Reason</th><th>By</th><th>Strikes</th><th /></tr></thead>
+      <tbody>{(d?.bans || []).map((b) => <tr key={b.key} className={b.active ? "warnrow" : ""}><td className="mono">{b.key}</td><td>{b.active ? <span className="schip s-bad">banned</span> : <span className="hint">lifted</span>} {until(b)}</td>
+        <td className="hint">{b.reason}</td><td>{b.by || "automatic"}</td><td>{b.strikes || ""}</td>
+        <td>{b.active ? <button className="link" onClick={() => unban(b.key)}>Unban</button> : <button className="link danger" onClick={() => ban(b.key, "", "made permanent")}>Ban for good</button>}</td></tr>)}
+        {!d?.bans?.length && <tr><td colSpan={6} className="hint">Nobody is banned.</td></tr>}</tbody></table>
+    <div className="formrow">
+      <label>Ban an address or range<input value={nb.ip} placeholder="203.0.113.7 or 203.0.113.0/24" onChange={(e) => setNb({ ...nb, ip: e.target.value.trim() })} /></label>
+      <label>For<select value={nb.minutes} onChange={(e) => setNb({ ...nb, minutes: e.target.value })}>
+        <option value="60">an hour</option><option value="1440">a day</option><option value="10080">a week</option><option value="">good</option></select></label>
+      <label>Reason<input value={nb.reason} placeholder="port scanning" onChange={(e) => setNb({ ...nb, reason: e.target.value })} /></label>
+      <button className="danger" disabled={!nb.ip} onClick={() => { ban(nb.ip, nb.minutes, nb.reason); setNb({ ip: "", minutes: "1440", reason: "" }); }}>Ban</button>
+    </div>
+
+    {s && <>
+      <h4>Automatic bans</h4>
+      <label className="chk"><input type="checkbox" checked={sec.ban_enabled !== false} onChange={(e) => upd("ban_enabled", e.target.checked)} /> Ban addresses that keep failing</label>
+      <div className="formrow">
+        <label>After<span className="nowrap"><input className="narrow" value={sec.ban_threshold ?? 10} onChange={(e) => upd("ban_threshold", e.target.value.replace(/\D/g, ""))} /> failures</span></label>
+        <label>Within<span className="nowrap"><input className="narrow" value={sec.ban_window_minutes ?? 15} onChange={(e) => upd("ban_window_minutes", e.target.value.replace(/\D/g, ""))} /> min</span></label>
+        <label>Ban for<span className="nowrap"><input className="narrow" value={sec.ban_minutes ?? 60} onChange={(e) => upd("ban_minutes", e.target.value.replace(/\D/g, ""))} /> min (doubles each repeat)</span></label>
+      </div>
+      <p className="hint">A wrong two-factor code counts double (the password was right), and a bot filling in the account request form's hidden field counts triple. Rate limits still apply first: 8 wrong passwords for one account, or 20 from one address, in 15 minutes.</p>
+      <label className="chk"><input type="checkbox" checked={sec.ban_email !== false} onChange={(e) => upd("ban_email", e.target.checked)} /> Email admins when an address is banned automatically</label>
+      <label className="col">Allowlist: never banned, and never locked out of an account by someone else's failures (one address or CIDR per line)
+        <textarea rows={3} className="mono" value={(sec.allowlist || []).join("\n")} onChange={(e) => upd("allowlist", e.target.value.split("\n"))} placeholder={d?.you || "81.2.3.4\n10.0.0.0/8"} /></label>
+      <div className="row"><span className="grow" />{dirty && <span className="hint">Unsaved changes</span>}<button className="primary" disabled={!dirty} onClick={save}>Save</button></div>
+    </>}
+
+    <h4>Security log</h4>
+    <div className="formrow">
+      <label>Address<input value={f.ip} placeholder="any" onChange={(e) => setF({ ...f, ip: e.target.value.trim() })} /></label>
+      <label>Kind<select value={f.kind} onChange={(e) => setF({ ...f, kind: e.target.value })}><option value="">any</option>
+        {[["login", "sign-ins"], ["2fa", "two-factor"], ["token", "API tokens"], ["ban", "bans"], ["blocked", "blocked requests"], ["reset", "reset links"], ["invite", "invites"], ["request", "account requests"], ["demo", "demo"]].map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select></label>
+      <button onClick={load}>Refresh</button>
+    </div>
+    {!d ? <p className="hint">Loading…</p> : (
+      <table className="grid compact audit"><thead><tr><th>When</th><th>What</th><th>Address</th><th>User</th><th>Detail</th><th /></tr></thead>
+        <tbody>{d.events.map((r, i) => (
+          <tr key={i} className={BAD.has(r.kind) ? "warnrow" : ""}>
+            <td title={new Date(r.ts * 1000).toLocaleString()}>{ago(r.ts)}</td><td>{SEC_KIND[r.kind] || r.kind}</td>
+            <td><button className="link mono" onClick={() => setF({ ...f, ip: r.ip })}>{r.ip}</button></td><td className="mono">{r.user}</td><td className="hint">{r.detail}</td>
+            <td>{r.ip && !r.kind.startsWith("ban") && r.kind !== "unban" && <button className="link danger" onClick={() => ban(r.ip, "1440", `from the security log: ${SEC_KIND[r.kind] || r.kind}`)}>Ban a day</button>}</td></tr>))}
+          {!d.events.length && <tr><td colSpan={6} className="hint">Nothing yet.</td></tr>}</tbody></table>)}
+    <p className="hint">Kept in the data folder (security.log, rotated at 5 MB). Locked out? On the host: <code>docker exec patchyard python -m app.security unban ADDRESS</code>.</p>
   </>);
 }

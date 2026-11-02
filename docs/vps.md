@@ -143,6 +143,49 @@ In **Admin**:
   - the package mirrors labs may reach,
   - the management address pool (default `172.30.0.0/16`, cut into /26 per lab).
 
+### A public demo
+
+![The sign-in page with the demo offer](images/screen-demo-login.png)
+
+To let people try Patchyard without an account, open **Admin** → **Limits & sandbox** → **Demo sign-in** and tick *Offer a demo on the sign-in page*. The sign-in page then shows the demo login (default `demo` / `demo`: change the password, it's shown to everyone) and a **Try the demo** button.
+
+Everyone can use the same demo login at the same time. Each visitor gets a throwaway account of their own (`demo-xxxx`), so nobody sees anyone else's work:
+
+- **Limits** are the demo's own (default: 2 labs, 1 running, 8 devices, 256 MB and half a CPU per device, 200 MB of disk), and **At once** caps how many visitors can be in at the same time (default 5). Size these for your server.
+- **Nothing is kept.** The visitor's labs are destroyed and the account deleted when they sign out, after the idle time (default 20 minutes), or when the session time runs out (default 60 minutes). A banner shows the time left and links to the account request form.
+- **Demo visitors can't** change the account, set up two-factor sign-in, make API tokens, import configs, use the admin pages, or reach the internet from their labs. They don't appear on challenge leaderboards.
+- The demo only runs on a sandboxed (`--public`) server, because visitors get a shell on lab devices.
+
+Active demo sessions are listed under the settings, with **End** to throw one away now. Each start and end is in the audit log.
+
+![Admin → Limits & sandbox → Demo sign-in](images/screen-admin-demo.png)
+
+![A demo session](images/screen-demo.png)
+
+## Brute-force protection
+
+![Admin → Security](images/screen-admin-security.png)
+
+**Admin** → **Security** shows what's been tried against the server, address by address:
+
+- failed sign-ins (and whether the user exists), wrong two-factor codes, invalid API tokens, reset and invite links that don't exist, account-request bots, and requests refused as cross-site;
+- totals for the last 24 hours and the addresses with the most failures.
+
+An address that fails 10 times in 15 minutes (configurable) is **banned for an hour**, twice as long on each repeat, up to a week. A banned address gets 403 for everything, sign-in included, and admins are emailed. A wrong two-factor code counts double (the password was right) and a bot filling in the request form's hidden field counts triple. The existing rate limits still apply first: 8 wrong passwords for one account, or 20 from one address, in 15 minutes.
+
+From the same page you can ban an address or a range for an hour, a day, a week or for good, lift bans, and make an automatic ban permanent. Put your own addresses or office range on the **allowlist**: they're never banned, and someone else hammering your username can't lock you out from them.
+
+Patchyard needs the visitor's real address, which Caddy passes on. If the page warns that every request comes from 127.0.0.1, the proxy's `X-Forwarded-For` isn't getting through; loopback is never banned, so nothing breaks, but nothing is protected either.
+
+Locked yourself out?
+
+```bash
+sudo docker exec patchyard python -m app.security bans             # what's banned
+sudo docker exec patchyard python -m app.security unban 81.2.69.14 # lift one
+```
+
+The log is `/opt/patchyard/security.log` (rotated at 5 MB); bans are in `/opt/patchyard/bans.json`.
+
 ## 9. Check it works
 
 After installing or updating, run the self-test. It deploys real labs through the API, waits for routing and services, checks them, and cleans up:

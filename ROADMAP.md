@@ -1,6 +1,6 @@
 # Roadmap
 
-## Next (0.16.0)
+## Next (0.17.0)
 - **Time machine:** record routing, neighbour and interface state continuously and scrub back to any moment ("what did the network look like when the alert fired?").
 - **Chaos mode:** random, schedulable faults (link down, impairment, process kill) with a resilience score.
 - **Shared labs and classroom mode:** invite users to a lab (edit or read-only); instructor view of every student's lab and score.
@@ -31,6 +31,7 @@
 - Per-hop Simulation stepping (hold packets at each device like Packet Tracer).
 
 ## Done
+- 0.16.0: public demo sign-in with throwaway per-visitor sessions; brute-force protection with a security log, automatic and manual IP bans and an allowlist.
 - 0.15.0: ISP and Internet devices with static/DHCP/BGP customers, transit peering and hosted public services; path explainer; troubleshooting tickets; failover test; change rehearsal; continuous network tests; VoIP MOS; IOS and NetBox import; API tokens; containerlab YAML export; idle-lab auto-stop.
 - 0.14.0: two-factor sign-in with recovery codes and a per-server policy; alert channels (ntfy, Teams, Slack, webhooks) with per-rule routing, quiet hours and rate limits; personal phone alerts; three new built-in challenges and a leaderboard.
 - 0.13.0: email (SMTP) with test and status, forgot-password, emailed invites and alert digests; lab challenges with a Check button, built-ins and publishing; audit log; per-user disk allowance; self-test; performance and stability pass.

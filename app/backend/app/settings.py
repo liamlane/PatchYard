@@ -3,7 +3,7 @@
 Everything has a default, so a missing or partial file is fine. Environment variables
 still override the matching value (NETLAB_FRR_IMAGE etc.) for container deployments.
 """
-import copy, json, os, threading
+import copy, json, os, re, threading
 from pathlib import Path
 from .env import env as env_get, home
 
@@ -31,11 +31,18 @@ DEFAULTS = {
     "alerts": {"enabled": True, "grace_s": 120, "rules": DEFAULT_RULES},
     "notifications": {"toast_min_severity": "warning", "toast_resolved": True, "sound": False},
     # require_2fa: auto = admins on a public (sandboxed) server, otherwise off
-    "security": {"auth_enabled": False, "password_hash": "", "session_hours": 12, "require_2fa": "auto"},
+    "security": {"auth_enabled": False, "password_hash": "", "session_hours": 12, "require_2fa": "auto",
+                 # brute-force protection (Admin → Security): weighted failures from one address within the
+                 # window ban it for ban_minutes (doubling on each repeat, a week at most); the allowlist is never banned
+                 "ban_enabled": True, "ban_threshold": 10, "ban_window_minutes": 15, "ban_minutes": 60, "ban_email": True, "allowlist": []},
     # multi-user: default limits for non-admin users (0 = unlimited) and images they may pick
     "users": {"quota": {"max_labs": 5, "max_running_labs": 1, "max_devices": 20, "device_memory_mb": 512, "device_cpus": 1.0,
                         "max_disk_mb": 2048},
               "allowed_images": [], "allow_requests": True, "idle_stop_minutes": 0, "idle_stop_admins": False},
+    # demo sign-in: anyone who signs in with the demo login gets a throwaway account of their own
+    # (labs and all), deleted when they sign out, go idle, or the session time runs out
+    "demo": {"enabled": False, "username": "demo", "password": "demo", "max_sessions": 5, "session_minutes": 60, "idle_minutes": 20,
+             "quota": {"max_labs": 2, "max_running_labs": 1, "max_devices": 8, "device_memory_mb": 256, "device_cpus": 0.5, "max_disk_mb": 200}},
     # public hosting: unprivileged lab devices, a management network per lab, and no internet
     # from labs except package downloads through Patchyard's proxy (users with 'internet' get full access)
     "sandbox": {"enabled": False, "mgmt_pool": "172.30.0.0/16", "lab_prefix": 26, "proxy_port": 3128,
@@ -159,6 +166,40 @@ def validate(s: dict) -> dict:
     s["users"]["allow_requests"] = bool(s["users"].get("allow_requests", True))
     s["users"]["idle_stop_minutes"] = int(max(0, min(10080, int(float(s["users"].get("idle_stop_minutes") or 0)))))
     s["users"]["idle_stop_admins"] = bool(s["users"].get("idle_stop_admins"))
+    sec = s["security"]
+    sec["ban_enabled"] = bool(sec.get("ban_enabled", True))
+    sec["ban_email"] = bool(sec.get("ban_email", True))
+    sec["ban_threshold"] = int(max(3, min(1000, int(float(sec.get("ban_threshold") or 10)))))
+    sec["ban_window_minutes"] = int(max(1, min(1440, int(float(sec.get("ban_window_minutes") or 15)))))
+    sec["ban_minutes"] = int(max(1, min(10080, int(float(sec.get("ban_minutes") or 60)))))
+    import ipaddress as _ipa
+    allow = []
+    for x in sec.get("allowlist") or []:
+        x = str(x).strip()
+        if not x:
+            continue
+        try:
+            allow.append(str(_ipa.ip_network(x, strict=False)))
+        except ValueError:
+            raise ValueError(f"allowlist: {x} isn't an address or CIDR")
+    sec["allowlist"] = allow[:100]
+    dm = s["demo"]
+    dm["enabled"] = bool(dm.get("enabled"))
+    dm["username"] = str(dm.get("username") or "demo").strip().lower()
+    if not re.fullmatch(r"[a-z][a-z0-9_-]{2,23}", dm["username"]):
+        raise ValueError("demo username: 3-24 lowercase letters, digits, _ and -")
+    dm["password"] = str(dm.get("password") or "")[:64]
+    if dm["enabled"] and len(dm["password"]) < 4:
+        raise ValueError("demo password: at least 4 characters (it's shown on the sign-in page)")
+    dm["max_sessions"] = int(max(1, min(100, int(float(dm.get("max_sessions") or 1)))))
+    dm["session_minutes"] = int(max(5, min(1440, int(float(dm.get("session_minutes") or 60)))))
+    dm["idle_minutes"] = int(max(5, min(1440, int(float(dm.get("idle_minutes") or 20)))))
+    dq = dm["quota"]
+    for k in ("max_labs", "max_running_labs", "max_devices", "device_memory_mb", "max_disk_mb"):
+        dq[k] = int(max(1, min(100000, int(float(dq.get(k) or 1)))))
+    dq["device_cpus"] = max(0.1, min(8.0, float(dq.get("device_cpus") or 0.5)))
+    if dq["device_memory_mb"] < 128:
+        raise ValueError("demo device memory: at least 128 MB")
     s["users"]["allowed_images"] = [str(x).strip()[:200] for x in s["users"].get("allowed_images") or [] if str(x).strip()][:50]
     import ipaddress as _ip
     sb = s["sandbox"]

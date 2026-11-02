@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.16.0
+- **Public demo** (Admin → Limits & sandbox → Demo sign-in): a demo login shown on the sign-in page, plus a **Try the demo** button. Any number of people can use it at once, up to a limit: each visitor gets a throwaway account (`demo-xxxx`) with its own labs and the demo's own limits, deleted with its labs on sign-out, after the idle time or when the session time runs out. A banner shows the time left and links to the request form. Demo visitors can't change the account, set up 2FA, make API tokens, import configs or reach the internet, and don't post leaderboard scores. Sandboxed servers only. Active sessions are listed for admins, with End.
+- **Brute-force protection** (Admin → Security): a security log of failed sign-ins and 2FA codes, invalid API tokens, unknown reset and invite links, request-form bots and refused cross-site requests; automatic bans after 10 weighted failures in 15 minutes (an hour, doubling each repeat, up to a week), emailed to admins; manual bans of addresses or ranges, timed or permanent; an allowlist that's never banned and never locked out by someone else's failures; a warning if the reverse proxy hides client addresses. `python -m app.security bans|ban|unban` on the host.
+- Fixed: a user (not an admin) opening Settings from the gear button crashed the page, because it opened on a tab only admins have.
+
 ## 0.15.2
 - The hardware catalogue is fetched until it loads: a page open while the server restarted for an update used to show empty Physical tabs until a reload.
 - VoIP jobs no longer show the iperf3 rate in the job list.

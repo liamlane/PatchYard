@@ -22,6 +22,12 @@ from .env import env
 COOKIE = "patchyard_session"
 SECRET_FILE = settings.FILE.parent / "secret.key"
 OPEN = ("/api/auth/", "/api/version", "/api/invite/")
+# what a demo session can't do: change the account, make tokens, import from outside, publish
+DEMO_DENY = (("*", "/api/auth/password"), ("*", "/api/auth/profile"), ("*", "/api/auth/2fa/"), ("*", "/api/auth/tokens"),
+             ("*", "/api/auth/ntfy"), ("*", "/api/auth/alert-email"), ("*", "/api/import/"), ("POST", "/api/labs/import"),
+             ("POST", "/api/labs/import-zip"), ("*", "/api/admin/"))
+CURRENT_IP: contextvars.ContextVar[str] = contextvars.ContextVar("patchyard_ip", default="")
+DEMO_SEEN: dict[str, float] = {}                      # demo user -> last request (for the idle timeout)
 ADMIN_ONLY = (("PUT", "/api/settings"), ("POST", "/api/labs/import"), ("*", "/api/admin/"))
 LAB_PATH = re.compile(r"^/(?:api/labs|ws/console)/([a-z0-9][a-z0-9-]{0,30})(?:/|$)")
 NOT_LABS = {"import", "import-zip"}
@@ -76,8 +82,8 @@ def _sig(msg: str) -> str:
     return hmac.new(_secret(), msg.encode(), hashlib.sha256).hexdigest()
 
 
-def make_session(name: str) -> tuple[str, int]:
-    hours = float(settings.get("security.session_hours", 12))
+def make_session(name: str, hours: float | None = None) -> tuple[str, int]:
+    hours = float(hours if hours is not None else settings.get("security.session_hours", 12))
     exp = int(time.time() + hours * 3600)
     gen = users.session_gen(name) or 0
     msg = f"{name}.{exp}.{gen}"
@@ -93,7 +99,7 @@ def session_user(tok: str | None) -> dict | None:
     u = users.get(name)
     if not u or u.get("disabled") or str(u.get("gen", 1)) != gen:
         return None
-    return {"name": name, "role": u.get("role", "user")}
+    return {"name": name, "role": u.get("role", "user"), **({"demo": True} if u.get("demo") else {})}
 
 
 def make_ticket(name: str) -> str:
@@ -125,7 +131,7 @@ def policy_2fa() -> str:
 
 def must_setup_2fa(who: dict | None) -> bool:
     """Signed in, but the server requires two-factor sign-in for this user and they haven't set it up."""
-    if not who or not enabled():
+    if not who or not enabled() or who.get("demo"):
         return False
     p = policy_2fa()
     if p == "off" or (p == "admins" and who.get("role") != "admin"):
@@ -244,11 +250,19 @@ class AuthMiddleware:
         if not guarded:
             return await self.app(scope, receive, send)
         method = scope.get("method", "GET")
+        from . import security
+        ip = (scope.get("client") or ("", 0))[0] or ""
+        security.seen(ip)
+        CURRENT_IP.set(ip)
+        if security.banned(ip):                         # banned addresses get nothing, the sign-in API included
+            security.blocked_hit(ip, path)
+            return await self._deny(scope, send, 403, "requests from your address are blocked: contact the server's admin")
         # cross-site requests: browsers send Origin on POST/PUT/DELETE and WebSockets
         origin = _header(scope, b"origin")
         if origin and (method not in ("GET", "HEAD") or scope["type"] == "websocket"):
             host = _header(scope, b"x-forwarded-host") or _header(scope, b"host")
             if re.sub(r"^https?://", "", origin).split("/")[0] != host.split(",")[0].strip():
+                security.event("cross-site", ip, "", f"{method} {path} from {origin[:80]}", weight=0)
                 return await self._deny(scope, send, 403, "cross-site request refused")
         who = None
         if enabled():
@@ -257,6 +271,7 @@ class AuthMiddleware:
             if who is None and bearer.lower().startswith("bearer "):
                 who = users.token_user(bearer[7:].strip())
                 if who is None:
+                    security.event("token.invalid", ip, "", path[:120])
                     return await self._deny(scope, send, 401, "invalid API token")
                 if path.startswith("/api/auth/") or path.startswith("/api/admin/users"):
                     return await self._deny(scope, send, 403, "API tokens can't change accounts")
@@ -268,6 +283,11 @@ class AuthMiddleware:
         try:
             if who and who.get("via") != "token" and not path.startswith("/api/auth/") and path != "/api/version" and must_setup_2fa(who):
                 return await self._deny(scope, send, 403, "2fa-setup-required: set up two-factor sign-in first")
+            if who and who.get("demo"):
+                DEMO_SEEN[who["name"]] = time.time()
+                for m, pre in DEMO_DENY:
+                    if (m == "*" or m == method) and (path == pre or path.startswith(pre.rstrip("/") + "/") or (pre.endswith("/") and path.startswith(pre))):
+                        return await self._deny(scope, send, 403, "not in the demo: request an account to use this")
             if who and who["role"] != "admin":
                 for m, pre in ADMIN_ONLY:
                     if (m == "*" or m == method) and (path == pre or (pre.endswith("/") and path.startswith(pre))):

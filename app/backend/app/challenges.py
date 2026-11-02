@@ -321,6 +321,9 @@ def _record(lab: dict, res: dict) -> bool:
         return False
     from . import auth
     owner = lab.get("owner") or auth.first_admin()
+    from . import users
+    if (users.get(owner) or {}).get("demo"):         # demo visitors are anonymous and gone after the session
+        return False
     d = _scores()
     row = d.setdefault(origin, {}).setdefault(owner, {"best": 0, "attempts": 0})
     row["attempts"] += 1

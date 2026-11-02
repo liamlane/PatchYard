@@ -118,3 +118,30 @@ async def idle_loop(stop):
             raise
         except Exception as e:  # noqa: BLE001
             log.warning("idle stop: %s", e)
+
+
+async def demo_loop(end):
+    """Demo sessions end when the visitor signs out (main.api_logout), goes idle, or runs out of time."""
+    while True:
+        await asyncio.sleep(60)
+        try:
+            await sweep_demo(end)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # noqa: BLE001
+            log.warning("demo sweep: %s", e)
+
+
+async def sweep_demo(end, now: float | None = None):
+    now = now or time.time()
+    idle = float(settings.get("demo.idle_minutes", 20)) * 60
+    life = float(settings.get("demo.session_minutes", 60)) * 60
+    for name, u in users.demo_users().items():
+        if not settings.get("demo.enabled"):                    # the demo was switched off: end what's left
+            await end(name, "demo switched off")
+            continue
+        seen = auth.DEMO_SEEN.get(name, max(STARTED, u.get("created") or 0))
+        if now - (u.get("created") or now) > life + 60:        # the session cookie has expired too
+            await end(name, "time up")
+        elif now - seen > idle:
+            await end(name, "idle")

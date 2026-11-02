@@ -1,13 +1,13 @@
 """Patchyard API + static web UI."""
-import asyncio, logging, re, secrets
+import asyncio, hmac, ipaddress, logging, re, secrets, time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from .env import env
-from fastapi import FastAPI, HTTPException, WebSocket, Request
+from fastapi import BackgroundTasks, FastAPI, HTTPException, WebSocket, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from . import labs, devices, metrics, monitor, impair, labmgmt, templates, settings, alerts, live, traffic, auth, hardware, reach, cfgstate, l3, system, users, sandbox, proxy
-from . import mailer, audit, challenges, notify, channels, watch
+from . import mailer, audit, challenges, notify, channels, watch, security
 from .version import VERSION, COMMIT
 from .capture import capture_for
 from .console import console
@@ -60,6 +60,8 @@ async def lifespan(_app):
         tasks.append(asyncio.create_task(channels.loop()))
         tasks.append(asyncio.create_task(watch.tests_loop()))
         tasks.append(asyncio.create_task(watch.idle_loop(_idle_stop)))
+        tasks.append(asyncio.create_task(watch.demo_loop(_end_demo)))
+        security.prune()
         await proxy.start()
         fw = await sandbox.refresh_firewall()
         if fw:
@@ -72,6 +74,24 @@ async def lifespan(_app):
 
 async def _idle_stop(name: str):
     await api_destroy(name)
+
+
+async def _end_demo(name: str, why: str = "signed out"):
+    """Throw a demo visitor's session away: destroy and delete their labs, then the account."""
+    if not (users.get(name) or {}).get("demo"):
+        return
+    gone = []
+    for l in [x["name"] for x in labs.list_labs() if x.get("owner") == name]:
+        try:
+            if await container_states(l):
+                await api_destroy(l)
+            labs.delete(l)
+            gone.append(l)
+        except Exception as e:  # noqa: BLE001 - keep going: the account must go
+            logging.getLogger("netlab").warning("demo cleanup %s/%s: %s", name, l, e)
+    users.delete_demo(name)
+    auth.DEMO_SEEN.pop(name, None)
+    audit.record("demo.end", name, f"{why}; labs: {', '.join(gone) or 'none'}", who="system")
 
 
 async def _restore_l3():
@@ -736,11 +756,23 @@ async def api_auth_state(request: Request):
                "two_factor": bool((u.get("totp") or {}).get("secret")), "recovery_left": len(u.get("recovery") or []),
                "ntfy_topic": u.get("ntfy_topic", ""), "must_setup_2fa": auth.must_setup_2fa(who),
                "two_factor_required": auth.policy_2fa() == "everyone" or (auth.policy_2fa() == "admins" and who.get("role") == "admin")}
+        if u.get("demo"):
+            mins = float(settings.get("demo.session_minutes", 60))
+            who["demo_ends"] = (u.get("created") or time.time()) + mins * 60
     return {"enabled": auth.enabled(), "logged_in": who is not None, "user": who,
             "multi_user": len(users.all_users()) > 1, "sandbox": sandbox.enabled(),
             "requests": auth.enabled() and bool(settings.get("users.allow_requests", True)),
             "forgot": auth.enabled() and notify.resets_possible(), "mail": mailer.enabled(), "require_2fa": auth.policy_2fa(),
-            "user_ntfy": bool(settings.get("channels.user_ntfy")), "ntfy_server": settings.get("channels.ntfy_server")}
+            "user_ntfy": bool(settings.get("channels.user_ntfy")), "ntfy_server": settings.get("channels.ntfy_server"),
+            "demo": _demo_public()}
+
+
+def _demo_public() -> dict | None:
+    if not (settings.get("demo.enabled") and auth.enabled() and sandbox.enabled()):
+        return None
+    return {"username": settings.get("demo.username", "demo"), "password": settings.get("demo.password", ""),
+            "minutes": settings.get("demo.session_minutes", 60), "idle_minutes": settings.get("demo.idle_minutes", 20),
+            "full": len(users.demo_users()) >= int(settings.get("demo.max_sessions", 5))}
 
 
 def _set_cookie(resp: JSONResponse, request: Request, name: str):
@@ -759,12 +791,18 @@ def _client_ip(request: Request) -> str:
 async def api_login(body: dict, request: Request):
     name = str(body.get("username") or "").strip().lower() or auth.first_admin()
     ip = _client_ip(request)
-    if auth.throttled(f"ip:{ip}", limit=20) or auth.throttled(f"user:{name}"):
+    if (settings.get("demo.enabled") and auth.enabled() and name == settings.get("demo.username", "demo") and not users.get(name)
+            and hmac.compare_digest(str(body.get("password", "")), str(settings.get("demo.password", "")))):
+        return await _start_demo(request)
+    # an allowlisted address (the admins' own) is never locked out by someone else hammering the account
+    if auth.throttled(f"ip:{ip}", limit=20) or (auth.throttled(f"user:{name}") and not security.exempt(ip)):
+        security.event("login.throttled", ip, name, "still trying while rate-limited")
         raise HTTPException(429, "too many failed logins: wait 15 minutes")
     u = await asyncio.to_thread(users.verify, name, str(body.get("password", "")))
     if not u:
         auth.failed(f"ip:{ip}", f"user:{name}")
         audit.record("login.fail", name, who="", ip=ip)
+        security.event("login.fail", ip, name, "unknown user" if not users.get(name) else "wrong password")
         await asyncio.sleep(1.0)
         st = await asyncio.to_thread(users.request_status, name, str(body.get("password", "")))
         if st == "pending":
@@ -779,6 +817,36 @@ async def api_login(body: dict, request: Request):
     return _set_cookie(JSONResponse({"ok": True, "user": {"name": name, "role": u.get("role", "user")}}), request, name)
 
 
+async def _start_demo(request: Request):
+    if not sandbox.enabled():                        # a demo visitor gets a shell on lab devices: never unsandboxed
+        raise HTTPException(403, "the demo needs the lab sandbox (a public install): ask the admin")
+    ip = _client_ip(request)
+    # per address, so one visitor can't use every seat; a class behind one NAT still fits
+    if auth.throttled(f"demo:{ip}", limit=max(6, 2 * int(settings.get("demo.max_sessions", 5))), window=3600):
+        security.event("demo.throttled", ip, "", "too many demo sessions")
+        raise HTTPException(429, "too many demo sessions from your address: try again later")
+    try:
+        name = users.create_demo(ip)
+    except users.DemoFull as e:
+        raise HTTPException(503, str(e))
+    auth.failed(f"demo:{ip}")                        # counts demo starts per address
+    auth.DEMO_SEEN[name] = time.time()
+    audit.record("demo.start", name, who=name, ip=ip)
+    resp = JSONResponse({"ok": True, "user": {"name": name, "role": "user", "demo": True}})
+    tok, age = auth.make_session(name, hours=float(settings.get("demo.session_minutes", 60)) / 60)
+    resp.set_cookie(auth.COOKIE, tok, max_age=age, httponly=True, samesite="lax", path="/",
+                    secure=request.headers.get("x-forwarded-proto") == "https" or request.url.scheme == "https")
+    return resp
+
+
+@app.post("/api/auth/demo")
+async def api_demo(request: Request):
+    """Start a demo session (the "Try the demo" button)."""
+    if not (settings.get("demo.enabled") and auth.enabled()):
+        raise HTTPException(404, "there's no demo on this server")
+    return await _start_demo(request)
+
+
 @app.post("/api/auth/2fa/login")
 async def api_2fa_login(body: dict, request: Request):
     ip = _client_ip(request)
@@ -786,11 +854,13 @@ async def api_2fa_login(body: dict, request: Request):
     if not name:
         raise HTTPException(401, "that took too long: sign in again")
     if auth.throttled(f"2fa:{name}", limit=6) or auth.throttled(f"ip:{ip}", limit=20):
+        security.event("2fa.throttled", ip, name, "still trying while rate-limited")
         raise HTTPException(429, "too many wrong codes: wait 15 minutes")
     how = await asyncio.to_thread(users.totp_verify, name, str(body.get("code") or ""))
     if not how:
         auth.failed(f"2fa:{name}", f"ip:{ip}")
         audit.record("2fa.fail", name, who="", ip=ip)
+        security.event("2fa.fail", ip, name, "wrong two-factor code (the password was right)", weight=2)
         await asyncio.sleep(0.5)
         raise HTTPException(401, "wrong code")
     users.touch_login(name)
@@ -851,8 +921,13 @@ async def api_2fa_recovery(body: dict):
 
 
 @app.post("/api/auth/logout")
-async def api_logout():
-    r = JSONResponse({"ok": True})
+async def api_logout(request: Request):
+    who = auth.session_user(request.cookies.get(auth.COOKIE))
+    tasks = None
+    if who and who.get("demo"):                    # destroying labs takes a while: after the response
+        tasks = BackgroundTasks()
+        tasks.add_task(_end_demo, who["name"], "signed out")
+    r = JSONResponse({"ok": True}, background=tasks)
     r.delete_cookie(auth.COOKIE, path="/")
     return r
 
@@ -892,6 +967,7 @@ async def api_forgot(body: dict, request: Request):
     ip = _client_ip(request)
     login = str(body.get("login") or "").strip().lower()[:254]
     if auth.throttled(f"forgot:{ip}", limit=5, window=3600):
+        security.event("forgot.throttled", ip, login, "too many reset requests")
         raise HTTPException(429, "too many reset requests from your address: try again in an hour")
     auth.failed(f"forgot:{ip}")
     if not notify.resets_possible():
@@ -907,19 +983,25 @@ async def api_forgot(body: dict, request: Request):
 
 
 @app.get("/api/auth/reset/{token}")
-async def api_reset_check(token: str):
-    return {"ok": True, "user": users.check_reset(token)}
+async def api_reset_check(token: str, request: Request):
+    try:
+        return {"ok": True, "user": users.check_reset(token)}
+    except users.UserError:
+        security.event("reset.invalid", _client_ip(request), "", "unknown or expired reset link")
+        raise
 
 
 @app.post("/api/auth/reset/{token}")
 async def api_reset(token: str, body: dict, request: Request):
     ip = _client_ip(request)
     if auth.throttled(f"reset:{ip}", limit=10):
+        security.event("reset.throttled", ip, "", "")
         raise HTTPException(429, "too many attempts: wait 15 minutes")
     try:
         name = users.use_reset(token, str(body.get("password", "")))
-    except users.UserError:
+    except users.UserError as e:
         auth.failed(f"reset:{ip}")
+        security.event("reset.invalid", ip, "", str(e), weight=1 if "password" not in str(e) else 0)
         raise
     audit.record("password.reset", name, who=name, ip=ip)
     if users.has_2fa(name):              # a reset link alone must not get past two-factor
@@ -936,9 +1018,11 @@ async def api_account_request(body: dict, request: Request):
         raise HTTPException(404, "account requests are turned off on this server")
     ip = _client_ip(request)
     if auth.throttled(f"req:{ip}", limit=3, window=3600):
+        security.event("request.throttled", ip, str(body.get("username", ""))[:40], "too many account requests")
         raise HTTPException(429, "too many requests from your address: try again in an hour")
     auth.failed(f"req:{ip}")                     # every attempt counts towards the limit
     if str(body.get("website") or ""):           # hidden field: only bots fill it in
+        security.event("request.bot", ip, str(body.get("username", ""))[:40], "filled in the hidden field", weight=3)
         return {"ok": True}
     if not body.get("agree"):
         raise HTTPException(400, "please accept the terms of use")
@@ -951,8 +1035,12 @@ async def api_account_request(body: dict, request: Request):
 
 
 @app.get("/api/invite/{token}")
-async def api_invite_check(token: str):
-    i = users.check_invite(token)
+async def api_invite_check(token: str, request: Request):
+    try:
+        i = users.check_invite(token)
+    except users.UserError:
+        security.event("invite.invalid", _client_ip(request), "", "unknown or expired invite link")
+        raise
     return {"ok": True, "role": i["role"], "expires": i["expires"]}
 
 
@@ -960,6 +1048,7 @@ async def api_invite_check(token: str):
 async def api_invite_redeem(token: str, body: dict, request: Request):
     ip = _client_ip(request)
     if auth.throttled(f"inv:{ip}", limit=10):
+        security.event("invite.throttled", ip, "", "")
         raise HTTPException(429, "too many attempts: wait 15 minutes")
     try:
         u = users.redeem(token, str(body.get("username", "")), str(body.get("password", "")),
@@ -1033,6 +1122,53 @@ async def api_admin_user_delete(name: str, delete_labs: bool = False):
     users.delete(name)
     audit.record("user.delete", name, f"labs: {', '.join(owned)}" if owned else "")
     return {"ok": True, "deleted_labs": owned}
+
+
+@app.get("/api/admin/security")
+async def api_admin_security(ip: str = "", kind: str = "", limit: int = 300):
+    return {"summary": security.summary(), "events": security.tail(max(1, min(2000, limit)), ip.strip(), kind.strip()),
+            "bans": security.list_bans(), "you": _client_ip_scope()}
+
+
+def _client_ip_scope() -> str:
+    from .auth import CURRENT_IP
+    return CURRENT_IP.get()
+
+
+@app.post("/api/admin/security/ban")
+async def api_admin_ban(body: dict):
+    me = auth.current()["name"]
+    target = str(body.get("ip") or "").strip()
+    mine = security._addr(_client_ip_scope())
+    if target and mine and mine in ipaddress.ip_network(target, strict=False):
+        raise HTTPException(400, "that would ban your own address")
+    mins = body.get("minutes")
+    b = security.ban(target, float(mins) if mins not in (None, "", 0, "0") else None, str(body.get("reason") or ""), me)
+    audit.record("security.ban", target, b.get("reason", ""))
+    return {"ok": True}
+
+
+@app.post("/api/admin/security/unban")
+async def api_admin_unban(body: dict):
+    key = str(body.get("key") or "").strip()
+    if not security.unban(key, auth.current()["name"]):
+        raise HTTPException(404, "no such ban")
+    audit.record("security.unban", key)
+    return {"ok": True}
+
+
+@app.get("/api/admin/demo")
+async def api_admin_demo():
+    return [{"name": n, "started": u.get("created"), "last_seen": auth.DEMO_SEEN.get(n), "ip": u.get("demo_ip", ""),
+             "labs": [l["name"] for l in labs.list_labs() if l.get("owner") == n]} for n, u in sorted(users.demo_users().items())]
+
+
+@app.post("/api/admin/demo/{name}/end")
+async def api_admin_demo_end(name: str):
+    if not (users.get(name) or {}).get("demo"):
+        raise HTTPException(404, "no such demo session")
+    await _end_demo(name, f"ended by {auth.current()['name']}")
+    return {"ok": True}
 
 
 @app.post("/api/admin/users/{name}/send-reset")

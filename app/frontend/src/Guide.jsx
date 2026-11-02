@@ -418,7 +418,7 @@ end`}</Cmd></li>
       <Tip>Players own their copy, so a determined one can open the editor and read the checks. Challenges are for learning, not exams.</Tip>
     </> },
 
-  { id: "account", group: "Your account", title: "Accounts, privacy and limits", icon: "keyboard", kw: "account password name email private labs limit quota sandbox internet package request invite sign out two-factor 2fa authenticator totp recovery ntfy phone",
+  { id: "account", group: "Your account", title: "Accounts, privacy and limits", icon: "keyboard", kw: "account password name email private labs limit quota sandbox internet package request invite sign out two-factor 2fa authenticator totp recovery ntfy phone demo try blocked banned",
     when: (p) => p.accounts,
     body: () => <>
       <ul>
@@ -429,6 +429,8 @@ end`}</Cmd></li>
         <li><b>Alerts on your phone:</b> if the admin allows it, put an ntfy topic in Account and password and subscribe to it in the free ntfy app.</li>
         <li><b>Alert emails:</b> Account and password → <i>Email me about alerts</i> sends a digest of warnings and critical alerts from your labs, at most every 10 minutes.</li>
         <li><b>Limits:</b> the server may limit how many labs you keep, how many run at once, devices per lab, memory/CPU per device, and the disk your labs use (configs, files on lab servers, snapshots). A lab that keeps growing past the disk limit is paused. You'll get a clear message when you hit one; ask the admin if you need more.</li>
+        <li><b>Demo sessions:</b> if the server offers a demo, the sign-in page has <i>Try the demo</i>. You get a private session with the full app and your own labs, within small limits. Nothing is kept: your labs are deleted when you sign out, after a while idle, or when the time shown at the bottom runs out. Request an account to keep your work.</li>
+        <li><b>"Requests from your address are blocked":</b> too many failed sign-ins or bad links came from your address, so the server is ignoring it for a while (an hour the first time). Wait, or ask the admin to lift the ban.</li>
         <li><b>Lab internet:</b> on a shared server, lab devices can't reach the internet, except the package mirrors servers and firewalls need when they start. Lab-to-lab traffic inside your lab is unaffected.</li>
       </ul>
     </> },
@@ -444,7 +446,7 @@ curl -H "$H" ${location.origin}/api/labs/LAB/clab.yml             # containerlab
 curl -H "$H" -X POST ${location.origin}/api/labs/LAB/destroy`}</Cmd>
       <p>Revoke a token any time; anything using it stops at once.</p>
     </> },
-  { id: "admin", group: "Your account", title: "Running the server (admins)", icon: "gear", kw: "admin users requests approve invite link role disable reset password quota trusted sandbox mirrors backup update",
+  { id: "admin", group: "Your account", title: "Running the server (admins)", icon: "gear", kw: "admin users requests approve invite link role disable reset password quota trusted sandbox mirrors backup update demo security brute force ban block allowlist attack",
     when: (p) => p.me?.role === "admin",
     body: () => <>
       <p>Your name (top right) → <B>Admin</B>. A red dot on your avatar means account requests are waiting.</p>
@@ -458,6 +460,8 @@ curl -H "$H" -X POST ${location.origin}/api/labs/LAB/destroy`}</Cmd>
         <li><b>Alert channels:</b> ntfy (phone push), Microsoft Teams, Slack or any JSON webhook, each with a minimum severity, a lab filter, resolved messages on or off, and quiet hours that critical alerts can break. Each alert rule can be sent to one channel or to the bell only (Settings → Alert rules → Send to). <B>Send test</B> checks a channel.</li>
         <li><b>Two-factor:</b> Limits & sandbox → Sign-in sets who must use it (automatic = admins on a public server). Users → Remove 2FA helps someone who lost their phone.</li>
         <li><b>Import from NetBox:</b> Lab manager → Share.</li>
+        <li><b>Demo sign-in:</b> Limits & sandbox → Demo sign-in. Each visitor who uses the demo login gets a throwaway account with its own labs and the demo limits, deleted on sign-out, when idle or when time's up. Many can use it at once, up to the number you set. Only on a sandboxed (public) server. Active sessions are listed there, with End.</li>
+        <li><b>Security:</b> failed sign-ins, wrong two-factor codes, invalid API tokens and bad reset or invite links, per address. Addresses that keep failing are banned automatically (an hour, doubling on each repeat), and you're emailed. Ban an address or range yourself, lift bans, and put your own addresses on the allowlist so you can never be locked out.</li>
         <li><b>Audit log:</b> sign-ins (and failed ones), account, invite and settings changes, labs created, deployed and deleted.</li>
       </ul>
       <h4>On the host</h4>
@@ -466,7 +470,9 @@ sudo docker logs -f patchyard                                     # app log
 sudo docker exec patchyard python -m app.auth list                # accounts
 sudo docker exec patchyard python -m app.auth reset-password NAME # new password
 sudo nft list table ip patchyard                                  # lab egress firewall
-sudo docker exec patchyard python -m app.selftest [--full]        # deploy real labs and check them`}</Cmd>
+sudo docker exec patchyard python -m app.selftest [--full]        # deploy real labs and check them
+sudo docker exec patchyard python -m app.security bans            # banned addresses
+sudo docker exec patchyard python -m app.security unban ADDRESS   # lift a ban (locked yourself out?)`}</Cmd>
       <p>Back up <code>/opt/patchyard</code>: it holds accounts, settings, every lab and the certificates.</p>
     </> },
 
