@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.15.2
+- The hardware catalogue is fetched until it loads: a page open while the server restarted for an update used to show empty Physical tabs until a reload.
+- VoIP jobs no longer show the iperf3 rate in the job list.
+- Docs: new [internet-and-testing.md](docs/internet-and-testing.md) guide; every screenshot retaken, plus new ones for the 0.15 features.
+
 ## 0.15.1
 Fixes from a full bug sweep:
 - **The hardware rear panel was invisible** (Physical tab: on-board ports and module slots, so modules looked like they did nothing). The account-request form's hidden anti-bot field shared its CSS class and hid it. Broken since 0.12.1.

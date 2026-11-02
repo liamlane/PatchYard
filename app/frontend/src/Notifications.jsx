@@ -83,7 +83,7 @@ export function TrafficPanel({ lab, states, onClose, notify, preset }) {
         <h3>Jobs</h3>
         {jobs.map((j) => (
           <div key={j.id} className={`job job-${j.state}`}>
-            <div className="row nowrap"><b>{j.src} → {j.dst}</b><span className="hint mono">{j.target} · {j.profile === "voip" ? "VoIP call" : j.proto.toUpperCase()}{j.rate_mbps ? ` · ${j.rate_mbps} Mb/s` : ""}{j.streams > 1 ? ` · ${j.streams}×` : ""}{j.reverse ? " · reverse" : ""}</span>
+            <div className="row nowrap"><b>{j.src} → {j.dst}</b><span className="hint mono">{j.target} · {j.profile === "voip" ? "VoIP call" : j.proto.toUpperCase()}{j.rate_mbps && j.profile !== "voip" ? ` · ${j.rate_mbps} Mb/s` : ""}{j.streams > 1 ? ` · ${j.streams}×` : ""}{j.reverse ? " · reverse" : ""}</span>
               <span className="grow" /><span className={`schip ${j.state === "done" ? "s-ok" : j.state === "failed" ? "s-bad" : "s-warn"}`}>{j.state}</span>
               {["starting", "running"].includes(j.state) && <button className="link danger" onClick={() => api.trafficStop(lab.name, j.id)}>Stop</button>}</div>
             {["starting", "running"].includes(j.state) && <div className="bar"><span style={{ width: `${(j.elapsed / j.duration) * 100}%` }} /></div>}

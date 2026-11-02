@@ -132,8 +132,17 @@ function Workspace() {
     if (!auth.checked || auth.need) return;
     refreshLabs(); api.presets().then(setPresets).catch(() => {}); api.templates().then(setTpls).catch(() => {});
     api.settings().then(setAppSettings).catch(() => {});
-    api.hardware().then((c) => { setCatalogue(c); setHwv((v) => v + 1); }).catch(() => {});
   }, [refreshLabs, auth.checked, auth.need]);
+  // The hardware catalogue drives every Physical tab and port name: keep trying until it loads
+  // (a failed fetch, e.g. while the server restarts for an update, used to leave them empty until a reload).
+  useEffect(() => {
+    if (!auth.checked || auth.need) return;
+    let stop = false, timer = null, wait = 1000;
+    const load = () => api.hardware().then((c) => { if (!stop) { setCatalogue(c); setHwv((v) => v + 1); } })
+      .catch(() => { if (!stop) { timer = setTimeout(load, wait); wait = Math.min(wait * 2, 30000); } });
+    load();
+    return () => { stop = true; clearTimeout(timer); };
+  }, [auth.checked, auth.need]);
   const beep = () => {
     try { const a = new AudioContext(), o = a.createOscillator(), g = a.createGain(); o.frequency.value = 880; g.gain.value = 0.08; o.connect(g); g.connect(a.destination); o.start(); o.stop(a.currentTime + 0.25); } catch { /* no audio */ }
   };

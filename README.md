@@ -156,7 +156,24 @@ A Services tab with a page per service, each with an On/Off switch and a running
 
 ## Screenshots
 
-![Small office template: firewall, switch, a server running every service, DHCP clients](docs/images/screen-canvas-office.png)
+![An office dual-homed to two ISPs, a broadband customer and the internet core](docs/images/screen-canvas-internet.png)
+
+### Troubleshooting and testing (0.15)
+
+| | |
+| --- | --- |
+| ![Explain a path](docs/images/screen-explain.png) | ![ISP device Config tab](docs/images/screen-isp.png) |
+| Explain a path: every hop's routing decision, the NAT that applied, and the ACL line that dropped the reply | ISP device: per-customer service (static, DHCP, BGP), the IOS to configure, and "Configure for me" |
+| ![Internet node, public services](docs/images/screen-internet.png) | ![Troubleshooting ticket](docs/images/screen-ticket.png) |
+| Internet node: transit peering, lab DNS and websites, simulated or real uplink | Troubleshooting ticket: a realistic fault, the user's complaint, hints and Check |
+| ![Failover test result](docs/images/screen-failover.png) | ![Change rehearsal](docs/images/screen-rehearsal.png) |
+| Failover test: outage per flow on failure and restore, and the routes that moved | Change rehearsal: what a change did to routes and neighbours |
+| ![VoIP call quality](docs/images/screen-voip.png) | ![IOS config import](docs/images/screen-ios-import.png) |
+| VoIP call test: MOS and R-factor, on a clean line and over a satellite link | Import real IOS configs: devices, cabling and a report of anything not translated |
+
+*Live results in these screens (running state, traces, test results) are sample data: the documentation is built without real lab containers.*
+
+### Building and running
 
 | | |
 | --- | --- |
@@ -166,16 +183,25 @@ A Services tab with a page per service, each with an On/Off switch and a running
 | A page per interface, current values, the IOS commands sent | Physical tab: model, modules, port lights, cable peers |
 | ![Switch Config tab, LACP port-channel](docs/images/screen-device-switch.png) | ![Firewall NAT page](docs/images/screen-firewall.png) |
 | Switch on the Open vSwitch engine: LACP port-channel | Firewall: PAT and port forwards with hit counters |
-| ![Admin panel, users](docs/images/screen-admin-users.png) | ![Admin panel, invite links](docs/images/screen-admin-invites.png) |
-| Admin: users, roles, limits, lab internet, reset/disable/delete | Admin: one-time invite links |
+| ![Server Services tab, DHCP page](docs/images/screen-services.png) | ![Alert rules in Settings](docs/images/screen-settings-alerts.png) |
+| Server DHCP: a pool per subnet, reservations, live leases | Alert rules with hold times, severities, ping probes and where each one is sent |
 | ![A challenge with its checks](docs/images/screen-challenge.png) | ![Lab manager, Challenges](docs/images/screen-challenges.png) |
 | Challenge panel: instructions, Check button, what's checked | Lab manager: built-in and published challenges |
-| ![Admin, Email](docs/images/screen-admin-email.png) | ![Admin, Audit log](docs/images/screen-admin-audit.png) |
-| Admin: SMTP with presets, what to send, Save and send test | Admin: audit log of sign-ins, accounts, settings and labs |
-| ![Server Services tab, DHCP page](docs/images/screen-services.png) | ![Alert rules in Settings](docs/images/screen-settings-alerts.png) |
-| Server DHCP: a pool per subnet, reservations, live leases | Alert rules with hold times, severities and ping probes |
+
+### Running a shared server
+
+| | |
+| --- | --- |
+| ![Admin panel, users](docs/images/screen-admin-users.png) | ![Admin panel, invite links](docs/images/screen-admin-invites.png) |
+| Admin: users, roles, 2FA, limits, lab internet, reset/disable/delete | Admin: one-time invite links |
+| ![Admin, limits and idle labs](docs/images/screen-admin-limits.png) | ![Admin, Audit log](docs/images/screen-admin-audit.png) |
+| Admin: default limits, idle-lab auto-stop, two-factor policy, sandbox | Admin: audit log of sign-ins, accounts, tokens, settings and labs |
+| ![Admin, Email](docs/images/screen-admin-email.png) | ![API tokens](docs/images/screen-tokens.png) |
+| Admin: SMTP with presets, what to send, Save and send test | API tokens for scripts and CI |
 
 ![Lab manager templates](docs/images/screen-lab-manager.png)
+
+![Small office template: firewall, switch, a server running every service, DHCP clients](docs/images/screen-canvas-office.png)
 
 ## How it works
 
@@ -210,7 +236,8 @@ The full walk-through is in [docs/architecture.md](docs/architecture.md).
 | [docs/install.md](docs/install.md) | Installing on any Linux host, options, updating, troubleshooting |
 | [docs/vps.md](docs/vps.md) | Hosting for other people: HTTPS, accounts, email, sandbox, self-test, backups |
 | [docs/proxmox.md](docs/proxmox.md) | Running it in a Proxmox VM |
-| [docs/challenges.md](docs/challenges.md) | Playing and writing challenges, every check type |
+| [docs/internet-and-testing.md](docs/internet-and-testing.md) | ISP and Internet devices, Explain a path, tickets, failover tests, change rehearsal, VoIP, imports, API tokens |
+| [docs/challenges.md](docs/challenges.md) | Playing and writing challenges, every check type, network tests |
 | [docs/architecture.md](docs/architecture.md) | How it works inside, security model, storage |
 | In the app | The **?** button opens a searchable how-to guide with walkthroughs |
 
@@ -239,6 +266,8 @@ pip install -r app/backend/requirements-dev.txt
 pytest -q tests
 cd app/frontend && npm ci && npm run dev        # UI on :5173, proxies /api to :8080
 ```
+
+Screenshots in `docs/images/` are retaken with `node tools/docs-screenshots.js` against a dev server (instructions at the top of the script).
 
 To build the image yourself, run `docker build -t patchyard:local .`, then set `PATCHYARD_IMAGE=patchyard:local` in `/opt/patchyard/deploy/.env`.
 

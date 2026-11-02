@@ -113,6 +113,8 @@ Each channel has a minimum severity, an optional list of labs, whether to send "
 
 On a busy server, Admin → Limits & sandbox → **Idle labs** destroys any lab nobody has used for the minutes you set (0 = never). Using a lab means having it open in a browser, a console in use, or an API call for it. Running configs are saved first and the owner is emailed, so they just deploy again. Admins' labs are left alone unless you tick *Admins' labs too*.
 
+![Admin → Limits & sandbox: default limits and idle labs](images/screen-admin-limits.png)
+
 ## 8. Let people in
 
 There are two ways in: invite links, and account requests from the sign-in page.
