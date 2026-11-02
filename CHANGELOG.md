@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.16.1
+- **Self-test shows its progress.** Every phase prints a line with the elapsed time: devices coming up (`3/5 running`), a countdown while routing settles, and each attempt at the checks (`attempt 2: 5/8 passing · waiting on: …`). Long calls print a "still working" line every 10 s. The total time is shown at the end.
+- **Self-test explains failures.** For every device with a failing check it prints the container's state, privileges and capabilities, running processes, interface addresses, FRR daemons and config folder, and the last lines of its log.
+- `--quick` retries failing checks for 90 s instead of 4 minutes. A healthy run takes about 2 minutes; a broken lab takes longer because failing checks are retried every 15 s.
+- The package proxy accepts connections from the host itself, so the self-test's proxy check no longer times out (it was blocked by the lab firewall, which only lets labs use the proxy).
+
 ## 0.16.0
 - **Public demo** (Admin → Limits & sandbox → Demo sign-in): a demo login shown on the sign-in page, plus a **Try the demo** button. Any number of people can use it at once, up to a limit: each visitor gets a throwaway account (`demo-xxxx`) with its own labs and the demo's own limits, deleted with its labs on sign-out, after the idle time or when the session time runs out. A banner shows the time left and links to the request form. Demo visitors can't change the account, set up 2FA, make API tokens, import configs or reach the internet, and don't post leaderboard scores. Sandboxed servers only. Active sessions are listed for admins, with End.
 - **Brute-force protection** (Admin → Security): a security log of failed sign-ins and 2FA codes, invalid API tokens, unknown reset and invite links, request-form bots and refused cross-site requests; automatic bans after 10 weighted failures in 15 minutes (an hour, doubling each repeat, up to a week), emailed to admins; manual bans of addresses or ranges, timed or permanent; an allowlist that's never banned and never locked out by someone else's failures; a warning if the reverse proxy hides client addresses. `python -m app.security bans|ban|unban` on the host.

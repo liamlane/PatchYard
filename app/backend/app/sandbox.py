@@ -210,6 +210,7 @@ table ip patchyard {{
     ip saddr {p} tcp dport {port} accept
     ip saddr {p} icmp type echo-request accept
     ip saddr {p} counter reject comment "lab to host"
+    iifname "lo" tcp dport {port} accept comment "the self-test checks the proxy from the host"
     tcp dport {port} counter drop comment "package proxy is for labs only"
   }}
 }}
