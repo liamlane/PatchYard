@@ -1,29 +1,37 @@
 # Roadmap
 
-## Next (0.15.0)
-- **Shared labs:** invite other users to a lab (edit or read-only), so an instructor can watch or help.
-- **Passkeys** (WebAuthn) as a second factor or instead of a password.
-- **Challenge packs:** import/export a set of challenges, and more built-ins (STP, HSRP-style failover with FRR's VRRP, DHCP relay, IPv6).
-- Download Simulation captures as pcap for Wireshark.
-- Verify the 1-hour history check on a long-running install.
+## Next (0.16.0)
+- **Time machine:** record routing, neighbour and interface state continuously and scrub back to any moment ("what did the network look like when the alert fired?").
+- **Chaos mode:** random, schedulable faults (link down, impairment, process kill) with a resilience score.
+- **Shared labs and classroom mode:** invite users to a lab (edit or read-only); instructor view of every student's lab and score.
+- **Public showcase links:** read-only share of a lab's design and configs.
+- **Live packet capture to Wireshark** (pcap download and streamed `tcpdump`).
+- **Passkeys** (WebAuthn).
+- Challenge packs and more built-ins (STP, VRRP, DHCP relay, IPv6).
+- Verify the 0.15 ISP/Internet devices, tickets and failover test on a live host.
 
 ## Planned
+- **Live collaboration:** several people editing one lab with cursors.
+- **AI hint tutor** for tickets and challenges (needs an API key per server; opt-in).
+- **SD-WAN template:** branch with dual ISP nodes, policy routing and probe-based path failover.
+- **Realistic internet:** larger BGP tables (thousands of prefixes, real-looking AS paths) on the Internet node.
+- More vendors: SR Linux, Arista cEOS (user-supplied image), VyOS.
 - SD-WAN-style template: branch with dual internet, policy routing and probe-based path failover.
 - BFD in the dual-ISP lab (closes the 180 s silent-failure gap) and BFD peers in templates.
 - More protocols/templates: IS-IS, IPv6 dual-stack, VXLAN/EVPN fabric.
 - RADIUS / TACACS+ servers with IOS `aaa` login on routers and switches; SNMP agent and a simple poller.
 - OVS port mirroring (SPAN) into a capture PC; MST.
 - VyOS as a device type (needs an image built from the VyOS ISO; no official container image).
-- Download Simulation captures as pcap for Wireshark.
 - Scheduled snapshots; include `/opt/netlab` in the Restic backup.
 - Firewall: site-to-site WireGuard/IPsec VPN, logging of dropped traffic to a syslog server.
 - arm64 image (Raspberry Pi 5, Ampere, Apple Silicon VMs).
 - Move the four original templates onto hardware models (the six 0.11 templates already use them).
 - IOS `copy … ftp://` and an SMTP/email service on servers (Packet Tracer's EMAIL page).
-- SR Linux / Arista cEOS device types; VM-based images where nested virtualisation is available.
+- VM-based images where nested virtualisation is available.
 - Per-hop Simulation stepping (hold packets at each device like Packet Tracer).
 
 ## Done
+- 0.15.0: ISP and Internet devices with static/DHCP/BGP customers, transit peering and hosted public services; path explainer; troubleshooting tickets; failover test; change rehearsal; continuous network tests; VoIP MOS; IOS and NetBox import; API tokens; containerlab YAML export; idle-lab auto-stop.
 - 0.14.0: two-factor sign-in with recovery codes and a per-server policy; alert channels (ntfy, Teams, Slack, webhooks) with per-rule routing, quiet hours and rate limits; personal phone alerts; three new built-in challenges and a leaderboard.
 - 0.13.0: email (SMTP) with test and status, forgot-password, emailed invites and alert digests; lab challenges with a Check button, built-ins and publishing; audit log; per-user disk allowance; self-test; performance and stability pass.
 - 0.12.1: account requests with admin approval, names and emails on accounts, built-in help & how-to guide.

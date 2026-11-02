@@ -253,13 +253,20 @@ class AuthMiddleware:
         who = None
         if enabled():
             who = session_user(_cookie(scope))
+            bearer = _header(scope, b"authorization")
+            if who is None and bearer.lower().startswith("bearer "):
+                who = users.token_user(bearer[7:].strip())
+                if who is None:
+                    return await self._deny(scope, send, 401, "invalid API token")
+                if path.startswith("/api/auth/") or path.startswith("/api/admin/users"):
+                    return await self._deny(scope, send, 403, "API tokens can't change accounts")
             if who is None and not path.startswith(OPEN):
                 return await self._deny(scope, send, 401, "login required")
         else:
             who = {"name": first_admin(), "role": "admin"}
         token = CURRENT.set(who)
         try:
-            if who and not path.startswith("/api/auth/") and path != "/api/version" and must_setup_2fa(who):
+            if who and who.get("via") != "token" and not path.startswith("/api/auth/") and path != "/api/version" and must_setup_2fa(who):
                 return await self._deny(scope, send, 403, "2fa-setup-required: set up two-factor sign-in first")
             if who and who["role"] != "admin":
                 for m, pre in ADMIN_ONLY:
@@ -268,6 +275,10 @@ class AuthMiddleware:
                 mm = LAB_PATH.match(path)
                 if mm and mm.group(1) not in NOT_LABS and not can_access(mm.group(1), who):
                     return await self._deny(scope, send, 404, f"lab '{mm.group(1)}' not found")
+            mm0 = LAB_PATH.match(path) if who else None
+            if mm0 and mm0.group(1) not in NOT_LABS and lab_owner(mm0.group(1)) is not None:
+                from . import watch            # idle stop: the lab is in use (only real labs, only after access is checked)
+                watch.touch(mm0.group(1))
             return await self.app(scope, receive, send)
         finally:
             CURRENT.reset(token)

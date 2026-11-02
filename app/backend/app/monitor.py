@@ -132,7 +132,7 @@ async def protocols(lab, node, which=None):
 
 async def health(labd: dict, states: dict) -> dict:
     """Per-router protocol summary for the dashboard."""
-    routers = [n["id"] for n in labd["nodes"] if n["type"] == "router" and states.get(n["id"]) == "running"]
+    routers = [n["id"] for n in labd["nodes"] if n["type"] in ("router", "isp", "internet") and states.get(n["id"]) == "running"]
     sem = asyncio.Semaphore(6)
 
     async def one(r):

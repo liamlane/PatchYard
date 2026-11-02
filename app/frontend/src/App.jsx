@@ -2,7 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import { ReactFlow, ReactFlowProvider, Background, Controls, MiniMap, applyEdgeChanges, useReactFlow } from "@xyflow/react";
 import { api } from "./api.js";
 import { DeviceNode, CableEdge, NoteNode, AreaNode } from "./canvas.jsx";
-import { ICONS, TYPE_LABEL, PREFIX, CableIcon } from "./icons.jsx";
+import { ICONS, TYPE_LABEL, PREFIX, CableIcon, DEVICE_TYPES } from "./icons.jsx";
 import DeviceWindow from "./DeviceWindow.jsx";
 import SimPanel from "./SimPanel.jsx";
 import Dashboard from "./Dashboard.jsx";
@@ -16,6 +16,7 @@ const Admin = lazy(() => import("./Admin.jsx"));
 const Guide = lazy(() => import("./Guide.jsx"));
 import { ChallengePanel } from "./Challenge.jsx";
 import { Require2FA } from "./TwoFactor.jsx";
+import { ExplainPanel, TicketPanel } from "./Explain.jsx";
 import { createPortal } from "react-dom";
 import { setMe } from "./me.js";
 import { PortMenu } from "./Hardware.jsx";
@@ -75,6 +76,7 @@ function Workspace() {
   const lastEid = useRef(-1);
   const [settingsTab, setSettingsTab] = useState(null);
   const [trafficPreset, setTrafficPreset] = useState(null);
+  const [explainPreset, setExplainPreset] = useState(null);
   const liveBase = useRef(null);
   const liveQueue = useRef(Promise.resolve());
   const [live, setLive] = useState(null);
@@ -381,11 +383,28 @@ function Workspace() {
   const newIdFrom = (used, type) => { let i = 1; while (used.has(`${PREFIX[type]}${i}`)) i++; return `${PREFIX[type]}${i}`; };
   const defaultProps = (type) => (type === "server" ? { ip_mode: "static", services: { http: { enabled: true } }, ...defaultHardware(type, appSettings) }
     : type === "pc" ? { ip_mode: "static", ...defaultHardware(type, appSettings) } : defaultHardware(type, appSettings));
+  // ISPs and Internet nodes get their own AS and address pool when they're created, so deleting or
+  // renaming another provider never renumbers them (the customers' configs depend on these).
+  const providerProps = (nodes, type) => {
+    const ps = nodes.filter((n) => n.type === "isp" || n.type === "internet").map((n) => n.props || {});
+    const asns = new Set(ps.map((x) => String(x.asn || ""))), pools = new Set(ps.map((x) => x.pool || ""));
+    if (type === "internet") {
+      const opts = [[64496, "203.0.113.0/24"], [64497, "198.51.100.0/24"], [64498, "192.0.2.0/24"], [64499, "100.127.0.0/22"]];
+      const [asn, pool] = opts.find(([a, pl]) => !asns.has(String(a)) && !pools.has(pl)) || [];
+      return asn ? { asn: String(asn), pool } : {};
+    }
+    for (let k = 1; k < 250; k++) {
+      const asn = String(64500 + k), pool = `81.${(k * 10) % 250 || 10}.0.0/16`;
+      if (!asns.has(asn) && !pools.has(pool)) return { asn, pool };
+    }
+    return {};
+  };
   const addNode = (type, pos) => {
     if (!lab) return;
     const id = newIdFrom(new Set(lab.nodes.map((n) => n.id)), type);
     const p = pos || centre();
-    change((l) => ({ ...l, nodes: [...l.nodes, { id, type, x: Math.round(p.x), y: Math.round(p.y), props: defaultProps(type) }] }));
+    change((l) => ({ ...l, nodes: [...l.nodes, { id, type, x: Math.round(p.x), y: Math.round(p.y),
+      props: type === "isp" || type === "internet" ? providerProps(l.nodes, type) : defaultProps(type) }] }));
     notify(`Added ${TYPE_LABEL[type]} ${id}`, deployed ? (liveEdit ? "Starting it now…" : "Redeploy to start it") : null);
   };
   const nextIf = (id) => {
@@ -413,6 +432,8 @@ function Workspace() {
     choosePort(n, ev, (ifn) => connect(a, aIf, n.id, ifn));
   };
   const openWin = (node, tab) => {
+    const clr = () => { try { window.getSelection()?.removeAllRanges(); } catch { /* old browsers */ } }; // a double-click on the canvas selects text in the window that opens
+    clr(); setTimeout(clr, 0); setTimeout(clr, 120);
     setZTop((z) => z + 1);
     setWins((w) => w.some((x) => x.node === node)
       ? w.map((x) => (x.node === node ? { ...x, z: zTop + 1, tab: tab || x.tab, tk: tab ? Date.now() : x.tk } : x))
@@ -440,7 +461,17 @@ function Workspace() {
     if (!src.length) return;
     const used = new Set(lab.nodes.map((n) => n.id)); const made = [];
     const copies = src.map((n) => { const id = newIdFrom(used, n.type); used.add(id); made.push(id); const c = { ...clone(n), id, x: n.x + 48, y: n.y + 48 }; delete c.raw; return c; });
-    change((l) => ({ ...l, nodes: [...l.nodes, ...copies] }));
+    change((l) => {
+      const nodes = [...l.nodes];
+      for (const c of copies) {
+        if (c.type === "isp" || c.type === "internet") {       // a copy needs its own AS and pool; its ports have no cables yet
+          const { asn, pool, ports, ...rest } = c.props || {}; // eslint-disable-line no-unused-vars
+          c.props = { ...rest, ...providerProps(nodes, c.type) };
+        }
+        nodes.push(c);
+      }
+      return { ...l, nodes };
+    });
     setSel(new Set(made));
     notify(`Duplicated ${src.length} device${src.length > 1 ? "s" : ""}`, "Settings copied; router configs start blank.");
   };
@@ -537,13 +568,14 @@ function Workspace() {
     setMenu({ x: e.clientX, y: e.clientY, items: [
       { header: `${d.id} · ${TYPE_LABEL[d.type]}${states[d.id] ? ` · ${states[d.id]}` : ""}` },
       { label: "Open", icon: "window", onClick: () => openWin(d.id) },
-      ["router", "switch", "firewall"].includes(d.type) && { label: "CLI", icon: "terminal", disabled: !running, onClick: () => openWin(d.id, "CLI") },
+      ["router", "switch", "firewall", "isp", "internet"].includes(d.type) && { label: "CLI", icon: "terminal", disabled: !running, onClick: () => openWin(d.id, "CLI") },
       ["pc", "server"].includes(d.type) && { label: "Desktop", icon: "terminal", onClick: () => openWin(d.id, "Desktop") },
       { label: "Monitor", icon: "pulse", disabled: !running, onClick: () => openWin(d.id, "Monitor") },
       { label: "Config", icon: "grid", onClick: () => openWin(d.id, "Config") },
       "-",
       { label: "Duplicate", icon: "copy", kbd: "Ctrl+D", onClick: () => { setSel(new Set([d.id])); setTimeout(() => keys.current.duplicate(), 0); } },
       { label: "Start cable from here", icon: "link", onClick: () => { setTool(tool === "select" ? "copper" : tool); setPick(null); choosePort(d, e, (ifn) => { setPick(d.id); setPickIf(ifn); }); } },
+      { label: "Explain a path from here", icon: "link", disabled: !running, onClick: () => { if (sim) toggleSim(); setExplainPreset({ src: d.id, k: Date.now() }); setSide("explain"); } },
       { label: "Generate traffic from here", icon: "flow", disabled: !running, onClick: () => { if (sim) toggleSim(); setTrafficPreset({ src: d.id, k: Date.now() }); setSide("traffic"); } },
       "-",
       { label: "Delete device", icon: "trash", danger: true, onClick: () => { change((l) => ({ ...l, nodes: l.nodes.filter((x) => x.id !== d.id), links: l.links.filter((k) => k.a !== d.id && k.b !== d.id) })); setWins((w) => w.filter((x) => x.node !== d.id)); } },
@@ -573,7 +605,7 @@ function Workspace() {
     const p = rf.screenToFlowPosition({ x: e.clientX, y: e.clientY });
     setMenu({ x: e.clientX, y: e.clientY, items: [
       { header: "Add here" },
-      ...["router", "switch", "firewall", "pc", "server"].map((t) => ({ label: TYPE_LABEL[t], icon: "plus", onClick: () => addNode(t, { x: p.x - DEV_W / 2, y: p.y - DEV_H / 2 }) })),
+      ...DEVICE_TYPES.map((t) => ({ label: TYPE_LABEL[t], icon: "plus", onClick: () => addNode(t, { x: p.x - DEV_W / 2, y: p.y - DEV_H / 2 }) })),
       { label: "Note", icon: "note", onClick: () => addAnn("note", p) }, { label: "Area", icon: "area", onClick: () => addAnn("area", { x: p.x + 150, y: p.y + 100 }) },
       "-",
       { label: "Select all devices", icon: "grid", kbd: "Ctrl+A", onClick: () => setSel(new Set(lab.nodes.map((n) => n.id))) },
@@ -590,6 +622,10 @@ function Workspace() {
     { label: "Lab manager: templates", icon: "layers", group: "Lab", run: () => setMgr("templates") },
     { label: "Lab manager: challenges", icon: "flag", group: "Lab", run: () => setMgr("challenges") },
     { label: "Challenge panel", icon: "flag", group: "Lab", run: () => setSide("challenge"), disabled: !lab },
+    { label: "Explain a path", icon: "link", group: "Lab", run: () => setSide("explain"), disabled: !deployed },
+    { label: "Troubleshooting tickets", icon: "bolt", group: "Lab", run: () => setSide("ticket"), disabled: !lab },
+    { label: "Add ISP", icon: "plus", group: "Edit", kbd: "6", run: () => addNode("isp"), disabled: !lab },
+    { label: "Add Internet", icon: "plus", group: "Edit", kbd: "7", run: () => addNode("internet"), disabled: !lab },
     { label: "Lab manager: snapshots & diff", icon: "diff", group: "Lab", run: () => setMgr("snapshots"), disabled: !lab },
     { label: "Clone / export / import", icon: "copy", group: "Lab", run: () => setMgr("share") },
     { label: "New blank lab", icon: "plus", group: "Lab", run: newLab },
@@ -628,7 +664,7 @@ function Workspace() {
       if (mod || e.altKey) return;
       const map = { v: () => { setTool("select"); setPick(null); setPickIf(null); setPortMenu(null); }, c: () => setTool("copper"), f: () => setTool("fibre"), s: () => setTool("serial"), n: () => k.addAnn("note"), a: () => k.addAnn("area"),
         g: () => setSnap((v) => !v), o: () => setOverlay((v) => !v), m: () => k.lab && setSide((s) => (s ? null : "dash")), t: () => setTheme((t) => (t === "dark" ? "light" : "dark")),
-        "?": () => setHelp("shortcuts"), ",": () => setSettingsTab("general"), 1: () => k.addNode("router"), 2: () => k.addNode("switch"), 3: () => k.addNode("firewall"), 4: () => k.addNode("pc"), 5: () => k.addNode("server"),
+        "?": () => setHelp("shortcuts"), ",": () => setSettingsTab("general"), 1: () => k.addNode("router"), 2: () => k.addNode("switch"), 3: () => k.addNode("firewall"), 4: () => k.addNode("pc"), 5: () => k.addNode("server"), 6: () => k.addNode("isp"), 7: () => k.addNode("internet"),
         escape: () => { setPick(null); setPickIf(null); setPortMenu(null); setSel(new Set()); setSelEdge(null); setMenu(null); } };
       if (map[key] && (k.lab || ["t", "?", ",", "escape"].includes(key))) { e.preventDefault(); map[key](); }
     };
@@ -686,6 +722,9 @@ function Workspace() {
         </div>}
         {lab && <TB icon="flag" label={lab.challenge ? `Challenge: ${lab.challenge.title}` : "Challenge (add instructions and checks)"} on={side === "challenge" && !sim}
           onClick={() => { if (sim) toggleSim(); setSide(side === "challenge" ? null : "challenge"); }} />}
+        {lab && <TB icon="link" label="Explain a path (why does or doesn't traffic get through?)" on={side === "explain" && !sim} disabled={!deployed}
+          onClick={() => { if (sim) toggleSim(); setSide(side === "explain" ? null : "explain"); }} />}
+        {lab && <TB icon="bolt" label="Troubleshooting tickets" on={side === "ticket" && !sim} onClick={() => { if (sim) toggleSim(); setSide(side === "ticket" ? null : "ticket"); }} />}
         {lab && <TB icon="dash" label="Dashboard" kbd="M" on={side === "dash" && !sim} onClick={() => { if (sim) toggleSim(); setSide(side === "dash" && !sim ? null : "dash"); }} />}
         {lab && <TB icon="flow" label="Traffic generator" on={side === "traffic" && !sim} disabled={!deployed} onClick={() => { if (sim) toggleSim(); setSide(side === "traffic" ? null : "traffic"); }} />}
         <button className={`tb bell ${side === "alerts" ? "on" : ""} ${alertSum?.by_severity?.critical ? "crit" : alertSum?.unacked ? "warn" : ""}`} title="Notifications"
@@ -712,7 +751,7 @@ function Workspace() {
 
       <aside className="palette" aria-label="Devices and tools">
         <h3>Devices</h3>
-        {["router", "switch", "firewall", "pc", "server"].map((t, i) => {
+        {DEVICE_TYPES.map((t, i) => {
           const I = ICONS[t];
           return (
             <button key={t} className="pal" draggable disabled={!lab} onDragStart={(e) => e.dataTransfer.setData("application/netlab", t)}
@@ -804,6 +843,13 @@ function Workspace() {
       {!sim && side === "challenge" && lab && (
         <ChallengePanel key={lab.name} lab={lab} deployed={deployed} me={me} notify={notify} onClose={() => setSide(null)}
           onChange={(c) => quiet((l) => { const n = { ...l }; if (c) n.challenge = c; else delete n.challenge; return n; })} />
+      )}
+      {!sim && side === "explain" && lab && (
+        <ExplainPanel lab={lab} states={states} preset={explainPreset} notify={notify} onClose={() => setSide(null)} onFocusNode={focusNode} />
+      )}
+      {!sim && side === "ticket" && lab && (
+        <TicketPanel lab={lab} deployed={deployed} notify={notify} onClose={() => setSide(null)}
+          onExplain={(src, target) => { setExplainPreset({ src, target, k: Date.now() }); setSide("explain"); }} />
       )}
       {!sim && side === "traffic" && lab && (
         <TrafficPanel key={trafficPreset?.k || "t"} lab={lab} states={states} preset={trafficPreset} notify={notify} onClose={() => setSide(null)} />

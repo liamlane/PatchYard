@@ -178,6 +178,7 @@ function Security({ s, notify, me }) {
       <p className="hint">A code from an authenticator app on your phone, as well as your password, every time you sign in.</p>
       <TwoFactorSection me={me} notify={notify} required={!!me.two_factor_required} />
       <PhoneAlerts me={me} notify={notify} />
+      <ApiTokens notify={notify} />
     </>}
     <h3>Change password</h3>
     <Field label="Current password"><input type="password" value={cur} onChange={(e) => setCur(e.target.value)} autoComplete="current-password" /></Field>
@@ -247,4 +248,28 @@ function PhoneAlerts({ me, notify }) {
       {me.ntfy_topic && <button onClick={async () => { const r = await api.ntfyTest().catch((x) => ({ error: x.message })); notify(r.ok ? "Test sent: check your phone" : `Couldn't send: ${r.error}`, null, r.ok ? "ok" : "bad"); }}>Send a test</button>}
     </div>
   </>);
+}
+
+function ApiTokens({ notify }) {
+  const [list, setList] = useState(null);
+  const [label, setLabel] = useState("");
+  const [fresh, setFresh] = useState("");
+  const load = () => api.tokens().then(setList).catch(() => setList([]));
+  useEffect(() => { load(); }, []);
+  const ago = (t) => (t ? new Date(t * 1000).toLocaleString() : "never");
+  return (
+    <section className="tokens">
+      <h3>API tokens</h3>
+      <p className="hint">For scripts and CI: send <code>Authorization: Bearer pyt_…</code> to any lab API (deploy, destroy, run checks, the containerlab YAML). A token acts as you, but can't change your password, 2FA or tokens. Ten at most.</p>
+      {fresh && <div className="ok-t token-fresh"><b>Copy it now, it isn't shown again:</b> <code className="mono">{fresh}</code>
+        <button className="link" onClick={() => navigator.clipboard?.writeText(fresh).then(() => notify("Copied", null, "ok"))}>Copy</button></div>}
+      {list?.length > 0 && <table className="grid compact"><thead><tr><th>Name</th><th>Ends</th><th>Created</th><th>Last used</th><th /></tr></thead>
+        <tbody>{list.map((t) => <tr key={t.id}><td>{t.label}</td><td className="mono">…{t.hint}</td><td>{ago(t.created)}</td><td>{ago(t.last_used)}</td>
+          <td><button className="link danger" onClick={async () => { if (!confirm(`Revoke “${t.label}”? Anything using it stops working.`)) return; await api.tokenRevoke(t.id).catch((e) => notify(e.message, null, "bad")); load(); }}>Revoke</button></td></tr>)}</tbody></table>}
+      <div className="row"><input placeholder="token name, e.g. ci-pipeline" value={label} maxLength={40} onChange={(e) => setLabel(e.target.value)} aria-label="Token name" />
+        <button disabled={!label.trim()} onClick={async () => {
+          try { const r = await api.tokenCreate(label.trim()); setFresh(r.token); setLabel(""); load(); } catch (e) { notify(e.message, null, "bad"); }
+        }}>Create token</button></div>
+    </section>
+  );
 }

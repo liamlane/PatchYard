@@ -51,7 +51,8 @@ def normalise(c: dict | None, node_ids: set[str]) -> dict | None:
     if not c:
         return None
     out = {"title": _s(c.get("title"), 120) or "Challenge", "instructions": str(c.get("instructions") or "")[:20000],
-           "feedback": c.get("feedback") if c.get("feedback") in ("full", "labels", "score") else "full", "checks": []}
+           "feedback": c.get("feedback") if c.get("feedback") in ("full", "labels", "score") else "full", "checks": [],
+           "watch": max(0, min(1440, int(float(c.get("watch") or 0))))}
     if ORIGIN_RE.match(str(c.get("origin") or "")):        # where it came from, for the leaderboard
         out["origin"] = c["origin"]
         try:
@@ -195,7 +196,7 @@ async def _one(lab: dict, k: dict, ctrs: dict) -> tuple[bool, str]:
             return (not found), ("not present, as required" if not found else "still present")
         return found, ("found" if found else "not found in the output")
     if t in ("ospf_full", "bgp_up", "route"):
-        if node["type"] != "router":
+        if node["type"] not in ("router", "isp", "internet"):
             return False, f"{nid} isn't a router"
         which = {"ospf_full": ["ospf"], "bgp_up": ["bgp"], "route": ["routes"]}[t]
         p = await monitor.protocols(name, nid, which)

@@ -109,6 +109,10 @@ Besides the bell and email, alerts can go to your phone and to team chat: **Admi
 
 Each channel has a minimum severity, an optional list of labs, whether to send "resolved" messages, and quiet hours (critical alerts can break through). **Send test** checks it. Under Settings → Alert rules, **Send to** sends a rule to one channel, or to the bell only. With *Let users get their own labs' alerts on their phone* ticked, each user can enter their own ntfy topic in Settings → Account.
 
+## Idle labs
+
+On a busy server, Admin → Limits & sandbox → **Idle labs** destroys any lab nobody has used for the minutes you set (0 = never). Using a lab means having it open in a browser, a console in use, or an API call for it. Running configs are saved first and the owner is emailed, so they just deploy again. Admins' labs are left alone unless you tick *Admins' labs too*.
+
 ## 8. Let people in
 
 There are two ways in: invite links, and account requests from the sign-in page.

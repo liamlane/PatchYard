@@ -141,7 +141,7 @@ def public(name: str, u: dict) -> dict:
     return {"name": name, "full_name": u.get("full_name", ""), "email": u.get("email", ""), "role": u.get("role", "user"), "created": u.get("created"), "last_login": u.get("last_login"),
             "disabled": bool(u.get("disabled")), "internet": bool(u.get("internet")), "quota": u.get("quota") or {},
             "alert_email": bool(u.get("alert_email")), "two_factor": bool((u.get("totp") or {}).get("secret")),
-            "recovery_left": len(u.get("recovery") or []), "ntfy_topic": u.get("ntfy_topic", "")}
+            "recovery_left": len(u.get("recovery") or []), "ntfy_topic": u.get("ntfy_topic", ""), "tokens": len(u.get("tokens") or {})}
 
 
 def create(name: str, password: str | None, role: str = "user", internet: bool = False,
@@ -568,4 +568,61 @@ def totp_verify(name: str, code: str) -> str | None:
             u["recovery"] = [r for r in rec if not hmac.compare_digest(h, r)]
             _save(d)
             return "recovery"
+    return None
+
+
+# ------------------------------------------------------------------ API tokens (scripts, CI, topology as code)
+
+def create_token(name: str, label: str) -> str:
+    """A personal API token (shown once): send it as 'Authorization: Bearer pyt_…'. Acts as the user."""
+    label = check_text(label, "token name", 1, 40)
+    token = "pyt_" + secrets.token_urlsafe(30)
+    with _LOCK:
+        d = _load()
+        u = d["users"].get(name)
+        if not u:
+            raise UserError(f"no user {name}")
+        toks = u.setdefault("tokens", {})
+        if len(toks) >= 10:
+            raise UserError("10 tokens at most: revoke one first")
+        toks[_th(token)[:32]] = {"label": label, "created": time.time(), "last_used": None, "hint": token[-4:]}
+        _save(d)
+    return token
+
+
+def list_tokens(name: str) -> list[dict]:
+    u = get(name) or {}
+    return [{"id": k[:12], **v} for k, v in sorted((u.get("tokens") or {}).items(), key=lambda x: -x[1]["created"])]
+
+
+def revoke_token(name: str, short: str):
+    with _LOCK:
+        d = _load()
+        u = d["users"].get(name) or {}
+        toks = u.get("tokens") or {}
+        for k in [k for k in toks if k.startswith(short) and len(short) >= 8]:
+            del toks[k]
+        _save(d)
+
+
+_TOKEN_SEEN: dict[str, float] = {}
+
+
+def token_user(token: str) -> dict | None:
+    """{"name", "role"} for a valid API token."""
+    if not token.startswith("pyt_") or len(token) > 100:
+        return None
+    h = _th(token)[:32]
+    for n, u in all_users().items():
+        t = (u.get("tokens") or {}).get(h)
+        if t and not u.get("disabled"):
+            now = time.time()
+            if now - _TOKEN_SEEN.get(h, 0) > 300:          # record use at most every 5 minutes
+                _TOKEN_SEEN[h] = now
+                with _LOCK:
+                    d = _load()
+                    if h in (d["users"].get(n, {}).get("tokens") or {}):
+                        d["users"][n]["tokens"][h]["last_used"] = now
+                        _save(d)
+            return {"name": n, "role": u.get("role", "user"), "via": "token"}
     return None

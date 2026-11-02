@@ -5,7 +5,7 @@ nsenter, so it works on every device type without installing anything in the lab
 images. Packets really cross the lab: the overlay, charts, impairments and alerts all
 see them. One server per job on its own port; the server exits after the test.
 """
-import asyncio, ipaddress, json, secrets, time
+import asyncio, json, re, secrets, time
 from . import netinfo
 from .util import run, check_host, check_ip
 
@@ -41,8 +41,24 @@ def public(j):
     return {k: v for k, v in j.items() if not k.startswith("_")}
 
 
+def mos(rtt_ms: float, jitter_ms: float, loss_pct: float) -> tuple[float, float]:
+    """(R factor, MOS) from the simplified ITU-T G.107 E-model, as VoIP monitoring tools use it."""
+    eff = rtt_ms / 2 + 2 * jitter_ms + 10
+    r = 93.2 - (eff / 40 if eff < 160 else (eff - 120) / 10) - 2.5 * loss_pct
+    r = max(0.0, min(100.0, r))
+    m = 1 + 0.035 * r + 0.000007 * r * (r - 60) * (100 - r)
+    return round(r, 1), round(max(1.0, min(4.5, m)), 2)
+
+
+def _grade(m: float) -> str:
+    return "excellent" if m >= 4.3 else "good" if m >= 4.0 else "fair" if m >= 3.6 else "poor" if m >= 3.1 else "bad"
+
+
 async def start(labd: dict, body: dict) -> dict:
     src, dst = body.get("src"), body.get("dst")
+    voip = body.get("profile") == "voip"
+    if voip:                     # one direction of a G.711 call: 50 packets/s of 160 bytes of voice + RTP header
+        body = {**body, "proto": "udp", "rate_mbps": 0.0872, "streams": 1}
     proto = "udp" if body.get("proto") == "udp" else "tcp"
     secs = int(max(1, min(3600, float(body.get("duration", 10)))))
     streams = int(max(1, min(16, int(body.get("streams", 1)))))
@@ -74,10 +90,17 @@ async def start(labd: dict, body: dict) -> dict:
     jid = secrets.token_hex(4)
     j = {"id": jid, "lab": labd["name"], "src": src, "dst": dst, "target": target, "proto": proto, "duration": secs,
          "streams": streams, "rate_mbps": rate_m or None, "reverse": bool(body.get("reverse")), "state": "starting",
-         "started": time.time(), "result": None, "error": None}
+         "started": time.time(), "result": None, "error": None, "profile": "voip" if voip else ""}
     JOBS[jid] = j
     j["_task"] = asyncio.create_task(_run(j, cs["pid"], cd["pid"], port))
     return public(j)
+
+
+def _end_ping(j):
+    p = j.get("_ping")
+    if p and p.returncode is None:
+        p.kill()
+        asyncio.ensure_future(p.wait())          # reap it
 
 
 async def _run(j, spid, dpid, port):
@@ -91,6 +114,11 @@ async def _run(j, spid, dpid, port):
         args.append("-u")
     if j["rate_mbps"]:
         args += ["-b", f"{j['rate_mbps']:g}M"]
+    if j.get("profile") == "voip":
+        args += ["-l", "172"]
+        ping = await asyncio.create_subprocess_exec("nsenter", "-t", str(spid), "-n", "ping", "-n", "-q", "-i", "0.2", "-c", str(max(5, int(j["duration"] * 5))), "-W", "1",
+                                                    j["target"], stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+        j["_ping"] = ping
     if j["reverse"]:
         args.append("-R")
     j["state"] = "running"
@@ -101,7 +129,7 @@ async def _run(j, spid, dpid, port):
     except asyncio.TimeoutError:
         cli.kill(); out, err = b"", b"timed out"
     except asyncio.CancelledError:
-        cli.kill(); srv.kill(); j["state"] = "stopped"; return
+        cli.kill(); srv.kill(); _end_ping(j); j["state"] = "stopped"; return
     if srv.returncode is None:
         srv.kill()
     try:
@@ -110,6 +138,7 @@ async def _run(j, spid, dpid, port):
         d = {}
     if d.get("error") or not d:
         j["state"], j["error"] = "failed", d.get("error") or err.decode().strip()[:300] or "iperf3 failed"
+        _end_ping(j)
         return
     end = d.get("end", {})
     if j["proto"] == "tcp":
@@ -120,6 +149,15 @@ async def _run(j, spid, dpid, port):
         s = end.get("sum", {})
         j["result"] = {"bps": s.get("bits_per_second"), "bytes": s.get("bytes"), "jitter_ms": s.get("jitter_ms"),
                        "lost_percent": s.get("lost_percent"), "packets": s.get("packets")}
+        if j.get("_ping"):
+            try:
+                pout, _ = await asyncio.wait_for(j["_ping"].communicate(), 10)
+            except asyncio.TimeoutError:
+                j["_ping"].kill(); pout = b""
+            m = re.search(r"= [\d.]+/([\d.]+)/", pout.decode(errors="ignore"))
+            rtt = float(m.group(1)) if m else 0.0
+            r, mo = mos(rtt, float(j["result"]["jitter_ms"] or 0), float(j["result"]["lost_percent"] or 0))
+            j["result"].update(rtt_ms=round(rtt, 1), r_factor=r, mos=mo, grade=_grade(mo))
     j["state"] = "done"
 
 

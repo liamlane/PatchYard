@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.15.1
+Fixes from a full bug sweep:
+- **The hardware rear panel was invisible** (Physical tab: on-board ports and module slots, so modules looked like they did nothing). The account-request form's hidden anti-bot field shared its CSS class and hid it. Broken since 0.12.1.
+- Double-clicking a device no longer leaves the text of the window that opens highlighted.
+- **ISP and Internet devices:**
+  - each new or duplicated provider now gets its own AS number and pool, stored on the device, so deleting or renaming another provider no longer renumbers it;
+  - two providers with the same AS or overlapping pools are refused with a clear message;
+  - a second Internet node gets its own AS, pool and router ID;
+  - a BGP customer's default AS follows the customer router, so a router dual-homed to two ISPs keeps one AS and different customers no longer share one;
+  - "Configure for me" peers using the router's existing BGP AS instead of failing on a second `router bgp`;
+  - a routed block past the end of the pool is refused instead of erroring at deploy;
+  - custom sites need a public-style address (so a site can't hijack a lab subnet).
+- **Tickets** only keep a fault that actually breaks the user's traffic (a redundant path or a mask that still fits used to give an instantly solved ticket); a half-applied fault is undone.
+- **Failover test** no longer waits 60 s for flows that never worked before the test; they're listed and left out.
+- **Network tests:** alerts for checks that were edited out, or for a removed challenge, now clear.
+- **Idle stop:** only a lab you can access, and that exists, counts as used.
+- The VoIP test's ping is always cleaned up when a run fails or is stopped.
+- A command that fails inside a device (usually: not running) answers 502 with the reason instead of a bare 500.
+
+## 0.15.0
+- **ISP and Internet devices** (palette keys 6 and 7). Cable a router, firewall or PC to an ISP and that port is a customer connection: static /30, DHCP "broadband", or BGP with a default route, optionally with a routed /29 or /28 of public addresses. Each port shows what to configure, the IOS commands, and a **Configure … for me** button for routers. Cable ISPs to an **Internet** node (or to each other) and they peer over eBGP, so you can build multi-ISP, dual-homed and provider labs. The Internet node (or a lone ISP) hosts the lab internet: DNS on 1.1.1.1 / 8.8.8.8 / 9.9.9.9, `www.example.com`, `www.example.net`, an iperf3 `speedtest.example.org`, `whatismyip.example.com` (shows your NAT'd address) and your own sites. Uplink **Simulated** (default, nothing leaves the server) or **Real** (masquerades out to the internet, for accounts with lab internet). Changes apply to a running lab with **Apply**.
+- **Explain a path** (toolbar or right-click): why A can or can't reach B, hop by hop from the running lab: each device's routing decision (route, protocol, next hop), the switches and VLANs on the way, the ACL line, firewall rule or NAT that matched, and the reply path, so asymmetric routing and blocked replies stand out.
+- **Troubleshooting tickets:** Patchyard breaks something realistic in a working lab (shut interface, wrong mask or gateway, wrong VLAN, missing OSPF network, stray ACL, deleted static route; two at once for a hard ticket) and gives you the complaint. Timer, three hints, Check, Give up (reveals and undoes it).
+- **Failover test** (cable panel): continuous pings between host pairs, the cable down until traffic recovers, then up; reports outage and loss per flow on failure and restore, and the routes each router lost, gained or moved.
+- **Change rehearsal** (Dashboard): take a baseline (routes, OSPF/BGP/LDP neighbours, reachability), make a change, compare.
+- **Network tests:** a challenge's checks can run every 1/5/15/60 minutes while the lab is deployed; failures raise the alert *Network test failed* through the usual channels.
+- **VoIP call test** in the traffic generator: one G.711 call, scored with the E-model (R-factor and MOS).
+- **Import Cisco IOS configs:** paste running-configs and get a lab, with cabling worked out from shared subnets and descriptions, and a report of every line not translated. **NetBox import** for admins (site or tag; devices, cables, addresses).
+- **API tokens** (Settings → Account) for scripts and CI (`Authorization: Bearer pyt_…`), and **containerlab YAML** download per lab.
+- **Idle labs** (Admin → Limits & sandbox): destroy labs nobody has used for N minutes, configs saved first, owner emailed.
+
 ## 0.14.0
 - **Two-factor sign-in** (TOTP, the codes authenticator apps show): set up from Settings → Account with a QR code, ten single-use recovery codes, new codes on demand. Sign-in asks for the code after the password; a code can't be reused and wrong codes are rate-limited. Admins choose who must use it (Admin → Limits & sandbox → Sign-in: automatic = admins on a public server, admins, everyone, or off); anyone who must and hasn't is taken to the setup page and can't use anything else until it's done. Admins can remove it for a lost phone (Users → Remove 2FA, or `python -m app.auth reset-2fa NAME`). A password-reset link no longer signs straight in when 2FA is on. Changes are emailed to the user and recorded in the audit log.
 - **Alert channels** (Admin → Alert channels): ntfy phone push, Microsoft Teams (Workflows webhooks, Adaptive Card), Slack and generic JSON webhooks. Per channel: minimum severity, lab filter, resolved messages, quiet hours (critical can break through), write-only token, **Send test** and last-delivery status. Alert rules can send to one channel or the bell only. At most 20 messages per channel in 10 minutes, then one "held back" note. Users can get their own labs' alerts on their phone with an ntfy topic, when an admin allows it.

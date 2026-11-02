@@ -131,6 +131,8 @@ def conditions(ctrs, deployed) -> list[tuple]:
                     if bad:
                         out.append((f"{rid}|{name}|{r['node']}|{r['target']}", r, name, r["node"], f"{r['node']} → {r['target']}",
                                     f"probe {r['node']} → {r['target']}: {res['loss']:g}% loss, RTT {res['rtt'] if res['rtt'] is not None else '–'} ms"))
+    from . import watch                       # failing network tests (challenge checks run on a timer)
+    out += watch.conditions(deployed)
     # remember counters for the *_rising rules
     for name in deployed:
         for node, v in metrics.LIVE.get(name, {}).get("nodes", {}).items():
@@ -217,7 +219,7 @@ async def health_loop():
                         p = await monitor.protocols(lab, node, ["ospf", "bgp", "ldp"])
                     PROTO[(lab, node)] = {k: p[k]["rows"] for k in ("ospf", "bgp", "ldp")}
                 jobs = [one(name, n["id"]) for name, lab in deployed.items() for n in lab["nodes"]
-                        if n["type"] == "router" and ctrs.get((name, n["id"]), {}).get("state") == "running"]
+                        if n["type"] in ("router", "isp", "internet") and ctrs.get((name, n["id"]), {}).get("state") == "running"]
                 live_keys = {(name, n["id"]) for name, lab in deployed.items() for n in lab["nodes"]}
                 for k in [k for k in PROTO if k not in live_keys]:
                     del PROTO[k]

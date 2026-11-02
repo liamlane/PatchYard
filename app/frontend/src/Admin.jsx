@@ -232,6 +232,10 @@ function Limits({ notify }) {
     <p className="hint">Admins have no limits. Per-user overrides are under Users → Limits. 0 = unlimited.</p>
     <div className="formrow">{QK.map(([k, l]) => (
       <label key={k}>{l}<input className="narrow" value={q[k]} onChange={(e) => upd("users", "quota", { ...q, [k]: e.target.value.replace(/[^\d.]/g, "") })} /></label>))}</div>
+    <h3>Idle labs</h3>
+    <div className="formrow"><label>Stop a lab nobody has used for<span className="nowrap"><input className="narrow" value={s.users.idle_stop_minutes ?? 0} onChange={(e) => upd("users", "idle_stop_minutes", Number(e.target.value.replace(/\D/g, "")) || 0)} /> minutes</span></label></div>
+    <label className="chk"><input type="checkbox" checked={!!s.users.idle_stop_admins} onChange={(e) => upd("users", "idle_stop_admins", e.target.checked)} /> Admins' labs too</label>
+    <p className="hint">0 = never. "Used" means the lab was open in a browser, a console was in use, or the API was called for it. The lab is destroyed (design and saved configs kept); the owner gets an email if email is set up, and it's in the audit log.</p>
     <h3>Sign-in</h3>
     <label className="col">Require two-factor sign-in
       <select value={s.security.require_2fa || "auto"} onChange={(e) => upd("security", "require_2fa", e.target.value)}>

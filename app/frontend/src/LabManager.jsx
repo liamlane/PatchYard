@@ -146,8 +146,12 @@ function Share({ lab, notify, onOpenLab, close, refreshLabs }) {
           <p className="hint">Copies the topology and every saved config into a new, independent lab.</p></section>
         <section><h3><Icon name="download" size={16} /> Export</h3>
           <a className="btn" href={api.exportUrl(lab.name)} download>Download patchyard-{lab.name}.zip</a>
-          <p className="hint">lab.json plus configs. Running router configs are saved first.</p></section>
+          <p className="hint">lab.json plus configs. Running router configs are saved first.</p>
+          <a className="btn" href={api.clabUrl(lab.name)} download>Download {lab.name}.clab.yml</a>
+          <p className="hint">The containerlab topology Patchyard generates for this lab: keep it in git, diff it, or deploy it with <code>containerlab deploy</code> elsewhere (alongside the exported configs).</p></section>
       </>)}
+      <IosImport notify={notify} onOpenLab={onOpenLab} close={close} refreshLabs={refreshLabs} />
+      {me()?.role === "admin" && <NetboxImport notify={notify} onOpenLab={onOpenLab} close={close} refreshLabs={refreshLabs} />}
       <section><h3><Icon name="upload" size={16} /> Import a Patchyard (or netlab) zip</h3>
         <div className="row"><input type="file" accept=".zip,application/zip" ref={file} onChange={(e) => !zname && setZname((e.target.files[0]?.name || "").replace(/^(netlab|patchyard)-|\.zip$/g, "").toLowerCase().replace(/[^a-z0-9-]/g, "-").slice(0, 31))} />
           <input placeholder="new lab name" value={zname} onChange={(e) => setZname(e.target.value.toLowerCase())} aria-label="Imported lab name" />
@@ -215,3 +219,71 @@ export default function LabManager({ lab, deployed, initial = "templates", notif
   );
 }
 export { MiniTopo };
+
+function ImportReport({ r }) {
+  if (!r) return null;
+  return <details className="import-report" open><summary>{r.devices} devices, {r.links} cables · {r.report.length} notes</summary>
+    <ul className="mono small">{r.report.map((x, i) => <li key={i}>{x}</li>)}</ul></details>;
+}
+
+function IosImport({ notify, onOpenLab, close, refreshLabs }) {
+  const [name, setName] = useState("");
+  const [cfgs, setCfgs] = useState([""]);
+  const [busy, setBusy] = useState(false);
+  const [r, setR] = useState(null);
+  const addFiles = async (files) => {
+    const texts = await Promise.all([...files].map((f) => f.text()));
+    setCfgs([...cfgs.filter((c) => c.trim()), ...texts]);
+  };
+  const ok = cfgs.filter((c) => c.trim()).length;
+  return (
+    <section><h3><Icon name="terminal" size={16} /> Import Cisco IOS configs</h3>
+      <p className="hint">Paste <code>show running-config</code> from each router (or choose the files). Patchyard builds the lab: one router per config, cables between interfaces that share a subnet (a switch when three or more do) or whose descriptions name each other, with interfaces, subinterfaces, static routes, OSPF, BGP, ACLs, NAT, helper addresses and VLANs translated; switches are recognised by their switchports. Anything it can't translate is listed.</p>
+      {cfgs.map((c, i) => <div key={i} className="row">
+        <textarea rows={4} className="mono grow" value={c} placeholder={`hostname R${i + 1}\n!\ninterface GigabitEthernet0/0\n ip address 10.0.12.1 255.255.255.0\n…`}
+          onChange={(e) => setCfgs(cfgs.map((x, j) => (j === i ? e.target.value : x)))} aria-label={`Config ${i + 1}`} />
+        {cfgs.length > 1 && <button className="icon-btn" onClick={() => setCfgs(cfgs.filter((_, j) => j !== i))} aria-label="Remove"><Icon name="x" /></button>}</div>)}
+      <div className="row">
+        <button onClick={() => setCfgs([...cfgs, ""])}><Icon name="plus" size={14} /> Another router</button>
+        <label className="btn">Choose files…<input type="file" multiple accept=".txt,.cfg,.conf,.ios,text/plain" hidden onChange={(e) => addFiles(e.target.files)} /></label>
+        <span className="grow" />
+        <input placeholder="new lab name" value={name} onChange={(e) => setName(e.target.value.toLowerCase())} aria-label="IOS lab name" />
+        <button className="primary" disabled={busy || !name || !ok} onClick={async () => {
+          setBusy(true);
+          try { const x = await api.importIos(name, cfgs.filter((c) => c.trim())); setR(x); notify(`Imported ${x.lab.name}`, `${x.devices} devices, ${x.links} cables`, "ok"); await refreshLabs(); }
+          catch (e) { notify(e.message, null, "bad"); }
+          setBusy(false);
+        }}>{busy ? "Importing…" : `Import ${ok || ""}`}</button>
+      </div>
+      <ImportReport r={r} />
+      {r && <button onClick={() => { close(); onOpenLab(r.lab.name); }}>Open {r.lab.name}</button>}
+    </section>
+  );
+}
+
+function NetboxImport({ notify, onOpenLab, close, refreshLabs }) {
+  const [f, setF] = useState({ name: "", url: "", token: "", site: "", tag: "" });
+  const [busy, setBusy] = useState(false);
+  const [r, setR] = useState(null);
+  const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+  return (
+    <section><h3><Icon name="layers" size={16} /> Import from NetBox</h3>
+      <p className="hint">Builds a lab from a NetBox site (or tag): devices by role (router, switch, firewall, server…), cables, and interface addresses. 60 devices at most. Admins only, because the server makes the request. The token is used once and not stored.</p>
+      <div className="formrow">
+        <label>NetBox URL<input value={f.url} placeholder="https://netbox.example.com" onChange={set("url")} /></label>
+        <label>API token<input type="password" value={f.token} onChange={set("token")} autoComplete="off" /></label>
+        <label>Site slug<input className="narrow2" value={f.site} placeholder="lon1" onChange={set("site")} /></label>
+        <label>or tag<input className="narrow2" value={f.tag} onChange={set("tag")} /></label>
+        <label>Lab name<input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value.toLowerCase() })} /></label>
+        <button className="primary" disabled={busy || !f.url || !f.token || !f.name || !(f.site || f.tag)} onClick={async () => {
+          setBusy(true);
+          try { const x = await api.importNetbox(f); setR(x); notify(`Imported ${x.lab.name}`, `${x.devices} devices, ${x.links} cables`, "ok"); await refreshLabs(); }
+          catch (e) { notify(e.message, null, "bad"); }
+          setBusy(false);
+        }}>{busy ? "Importing…" : "Import"}</button>
+      </div>
+      <ImportReport r={r} />
+      {r && <button onClick={() => { close(); onOpenLab(r.lab.name); }}>Open {r.lab.name}</button>}
+    </section>
+  );
+}

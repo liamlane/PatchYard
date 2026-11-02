@@ -1,3 +1,4 @@
+import { IspConfig } from "./Isp.jsx";
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api.js";
 import Terminal from "./Terminal.jsx";
@@ -14,6 +15,8 @@ const TABS = {
   pc: ["Physical", "Config", "Desktop", "Monitor"],
   server: ["Physical", "Config", "Services", "Desktop", "Monitor"],
   firewall: ["Physical", "Config", "CLI", "Monitor"],
+  isp: ["Config", "CLI", "Monitor"],
+  internet: ["Config", "CLI", "Monitor"],
 };
 
 function maskToPrefix(m) {
@@ -27,7 +30,7 @@ function prefixToMask(p) {
 
 export default function DeviceWindow({ lab, node, state, z, onFocus, onClose, onUpdateNode, onRename, notify, initialPos, initialTab, tabKey, deployed, poweredOff, ifStates, settings, onStatus }) {
   const tabs = TABS[node.type] || ["Physical", "Config"];
-  const [tab, setTab] = useState(initialTab && tabs.includes(initialTab) ? initialTab : tabs[node.type === "router" ? 2 : node.type === "pc" ? 2 : node.raw ? 0 : 1]);
+  const [tab, setTab] = useState(initialTab && tabs.includes(initialTab) ? initialTab : tabs[node.type === "router" ? 2 : node.type === "pc" ? 2 : node.raw || node.type === "isp" || node.type === "internet" ? 0 : 1]);
   useEffect(() => { if (initialTab && tabs.includes(initialTab)) setTab(initialTab); }, [initialTab, tabKey]); // eslint-disable-line
   const [max, setMax] = useState(false);
   const [pos, setPos] = useState(initialPos);
@@ -70,6 +73,7 @@ export default function DeviceWindow({ lab, node, state, z, onFocus, onClose, on
           if (node.type === "router") return <RouterConfigX {...P} />;
           if (node.type === "switch") return <SwitchConfigX {...P} />;
           if (node.type === "firewall") return <FirewallConfigX {...P} />;
+          if (node.type === "isp" || node.type === "internet") return <IspConfig {...P} />;
           return <HostConfigX {...P} />;
         })()}
         {tab === "CLI" && (running ? <Cli lab={lab} node={node} settings={settings} /> : <NotRunning />)}
@@ -85,7 +89,8 @@ function NotRunning() {
   return <p className="empty">Deploy the lab (and power the device on) to use this tab.</p>;
 }
 
-const CLI_MODES = { router: [["ios", "IOS"], ["vtysh", "FRR"], ["sh", "Shell"]], switch: [["ios", "IOS"], ["sh", "Shell"]], firewall: [["sh", "Shell"]] };
+const CLI_MODES = { router: [["ios", "IOS"], ["vtysh", "FRR"], ["sh", "Shell"]], switch: [["ios", "IOS"], ["sh", "Shell"]], firewall: [["sh", "Shell"]],
+  isp: [["vtysh", "FRR"], ["sh", "Shell"]], internet: [["vtysh", "FRR"], ["sh", "Shell"]] };
 function Cli({ lab, node, settings }) {
   const modes = node.raw ? [[node.type === "router" ? "vtysh" : "sh", node.type === "router" ? "FRR" : "Shell"]] : CLI_MODES[node.type];
   const def = settings?.general?.cli_default === "frr" && node.type === "router" ? "vtysh" : modes[0][0];

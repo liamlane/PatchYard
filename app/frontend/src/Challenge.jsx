@@ -111,6 +111,11 @@ function Editor({ lab, me, onSave, onCancel, notify }) {
       <label className="col">Players see
         <select value={c.feedback} onChange={(e) => set("feedback", e.target.value)}>
           <option value="full">each check, pass or fail, and why</option><option value="labels">each check, pass or fail</option><option value="score">only the score</option></select></label>
+      <label className="col">Network tests
+        <select value={String(c.watch || 0)} onChange={(e) => set("watch", Number(e.target.value))}>
+          <option value="0">off</option><option value="1">run these checks every minute while deployed</option><option value="5">every 5 minutes</option>
+          <option value="15">every 15 minutes</option><option value="60">every hour</option></select>
+        <span className="hint">A failing check raises the alert “Network test failed” (and sends it wherever your alerts go), and clears when it passes again.</span></label>
       <h3>Checks <span className="hint">{c.checks.length} · {total} points</span></h3>
       {c.checks.map((k, i) => <CheckRow key={k.id || i} k={k} i={i} n={c.checks.length} lab={lab} nodes={nodes} onChange={(p) => setCk(i, p)} onMove={(d) => move(i, d)}
         onDelete={() => set("checks", c.checks.filter((_, j) => j !== i))} />)}

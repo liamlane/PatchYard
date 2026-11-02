@@ -66,11 +66,15 @@ export function TrafficPanel({ lab, states, onClose, notify, preset }) {
         <div className="tg-grid">
           <label>From<select value={f.src} onChange={set("src")}><option value="">source…</option>{hosts.map((n) => <option key={n.id}>{n.id}</option>)}</select></label>
           <label>To<select value={f.dst} onChange={set("dst")}><option value="">destination…</option>{hosts.filter((n) => n.id !== f.src).map((n) => <option key={n.id}>{n.id}</option>)}</select></label>
-          <label>Protocol<div className="seg">{["tcp", "udp"].map((p) => <button key={p} className={f.proto === p ? "on" : ""} onClick={() => setF({ ...f, proto: p })}>{p.toUpperCase()}</button>)}</div></label>
+          <label>Kind<div className="seg">{[["tcp", "TCP"], ["udp", "UDP"], ["voip", "VoIP call"]].map(([p, l]) => <button key={p} className={(f.profile === "voip" ? "voip" : f.proto) === p ? "on" : ""}
+            onClick={() => setF(p === "voip" ? { ...f, profile: "voip", proto: "udp" } : { ...f, profile: "", proto: p })}>{l}</button>)}</div></label>
+          {f.profile !== "voip" && <>
           <label>Rate<span className="nowrap"><input className="narrow" type="number" min="0" placeholder={f.proto === "udp" ? "10" : "max"} value={f.rate_mbps} onChange={set("rate_mbps")} /> Mb/s</span></label>
+          </>}
           <label>Duration<span className="nowrap"><input className="narrow" type="number" min="1" max="3600" value={f.duration} onChange={set("duration")} /> s</span></label>
-          <label>Streams<input className="narrow" type="number" min="1" max="16" value={f.streams} onChange={set("streams")} /></label>
+          {f.profile !== "voip" && <label>Streams<input className="narrow" type="number" min="1" max="16" value={f.streams} onChange={set("streams")} /></label>}
         </div>
+        {f.profile === "voip" && <p className="hint">One G.711 call (about 87 kb/s of 172-byte packets) plus pings for delay. The result is a call-quality score: R-factor and MOS from the ITU E-model (4.3 is perfect, under 3.6 people complain).</p>}
         <label className="chk"><input type="checkbox" checked={f.reverse} onChange={set("reverse")} /> Reverse (destination sends to source)</label>
         <div className="row"><button className="primary" disabled={!f.src || !f.dst} onClick={start}><Icon name="play" size={14} /> Start</button>
           <span className="hint">The destination's first lab address is used. Watch it on the canvas with the traffic overlay (O).</span></div>
@@ -79,13 +83,14 @@ export function TrafficPanel({ lab, states, onClose, notify, preset }) {
         <h3>Jobs</h3>
         {jobs.map((j) => (
           <div key={j.id} className={`job job-${j.state}`}>
-            <div className="row nowrap"><b>{j.src} → {j.dst}</b><span className="hint mono">{j.target} · {j.proto.toUpperCase()}{j.rate_mbps ? ` · ${j.rate_mbps} Mb/s` : ""}{j.streams > 1 ? ` · ${j.streams}×` : ""}{j.reverse ? " · reverse" : ""}</span>
+            <div className="row nowrap"><b>{j.src} → {j.dst}</b><span className="hint mono">{j.target} · {j.profile === "voip" ? "VoIP call" : j.proto.toUpperCase()}{j.rate_mbps ? ` · ${j.rate_mbps} Mb/s` : ""}{j.streams > 1 ? ` · ${j.streams}×` : ""}{j.reverse ? " · reverse" : ""}</span>
               <span className="grow" /><span className={`schip ${j.state === "done" ? "s-ok" : j.state === "failed" ? "s-bad" : "s-warn"}`}>{j.state}</span>
               {["starting", "running"].includes(j.state) && <button className="link danger" onClick={() => api.trafficStop(lab.name, j.id)}>Stop</button>}</div>
             {["starting", "running"].includes(j.state) && <div className="bar"><span style={{ width: `${(j.elapsed / j.duration) * 100}%` }} /></div>}
             {j.result && <div className="mono job-r">{fmtBps(j.result.bps)}
               {j.result.retransmits != null && ` · ${j.result.retransmits} retransmits`}
-              {j.result.lost_percent != null && ` · ${j.result.lost_percent.toFixed(2)}% loss · ${j.result.jitter_ms?.toFixed(2)} ms jitter`}</div>}
+              {j.result.lost_percent != null && ` · ${j.result.lost_percent.toFixed(2)}% loss · ${j.result.jitter_ms?.toFixed(2)} ms jitter`}
+              {j.result.mos != null && <div className="mos"><span className={`schip s-${j.result.mos >= 4 ? "ok" : j.result.mos >= 3.6 ? "warn" : "bad"}`}>MOS {j.result.mos.toFixed(2)}</span> R {Math.round(j.result.r_factor)} · {j.result.rtt_ms} ms RTT · {j.result.grade}</div>}</div>}
             {j.error && <div className="error">{j.error}</div>}
           </div>
         ))}
@@ -234,7 +239,7 @@ function RequestAccount({ sent, onSent, onBack }) {
         </div>
         <label className="col">What will you use it for?<textarea rows={3} value={f.reason} maxLength={500} onChange={set("reason")}
           placeholder="e.g. CCNA study, practising OSPF and BGP, testing a design before a client rollout" /></label>
-        <input className="hp" tabIndex={-1} autoComplete="off" aria-hidden="true" value={f.website} onChange={set("website")} name="website" />
+        <input className="hp-trap" tabIndex={-1} autoComplete="off" aria-hidden="true" value={f.website} onChange={set("website")} name="website" />
         <label className="chk"><input type="checkbox" checked={f.agree} onChange={set("agree")} /> I'll use this server for personal, educational or other non-commercial work, and I won't use lab devices to attack or scan anything.</label>
         {err && <p className="error">{err}</p>}
         <button className="primary big" disabled={busy || !ok}>Send request</button>

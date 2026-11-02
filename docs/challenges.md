@@ -48,6 +48,12 @@ The challenge is stored in the lab (`lab.json`), so it goes wherever the lab goe
 - **Export** it as a zip from Lab manager → Clone · export · import. Anyone can import the zip and play it.
 - **Publish** it (admins): the editor has *Publish to everyone on this server*. Patchyard stores a copy of the lab as it is at that moment (design and saved configs). It then appears in everyone's Challenges tab, and each player who starts it gets their own lab. Unpublishing removes it from the list; labs people already started stay.
 
+## Network tests
+
+A challenge's checks can also run on their own while the lab is deployed: set **Network tests** in the editor to every 1, 5, 15 or 60 minutes. A failing check raises the alert *Network test failed* (lab, and which check) through the bell and any alert channels, and it clears when the check passes again. Use it to keep "these must always work" assertions on a lab you're changing.
+
+For practice without writing checks at all, use **Troubleshooting tickets** (toolbar): Patchyard breaks something in a working lab and you fix it.
+
 ## Check types
 
 | Check | Passes when | Fields |

@@ -94,6 +94,10 @@ async def _post_link_hook(labd, node_id, ifn):
         await dsh(lab, node_id, "; ".join(cmds) + "; true")
         errs = await l3.apply_node(labd, node)        # VRF membership, ACLs, NAT, relay on the new port
         return f"{node_id}: {ifn} up (FRR picks it up automatically)" + (f" ({'; '.join(errs)[:160]})" if errs else "")
+    if t in ("isp", "internet") and not node.get("raw"):
+        from . import isp
+        notes = await isp.apply(labs.load(lab))          # addressing depends on every provider's cables
+        return f"{node_id}: {ifn} is a provider port now ({'; '.join(notes)[:160]})"
     if t in ("pc", "server") and ifn == "eth1" and p.get("ip_mode") in ("static", "dhcp"):
         if p.get("ip_mode") == "static" and not p.get("ip"):
             return ""

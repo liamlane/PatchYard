@@ -79,6 +79,8 @@ export default function LinkPanel({ lab, link, deployed, rate, hist, presets, on
         <p className="hint">Down = both ends administratively down, kept across redeploys. Flap = down, wait, up (for failover testing).</p>
       </section>
 
+      <Failover lab={lab} link={link} deployed={deployed} down={down} notify={notify} />
+
       <section>
         <h4>Impairment <span className="hint">tc netem</span></h4>
         <div className="presets">{Object.entries(presets || {}).map(([k, p]) => (
@@ -98,5 +100,49 @@ export default function LinkPanel({ lab, link, deployed, rate, hist, presets, on
       </section>
       {out && <pre className="eq">{out}</pre>}
     </div>
+  );
+}
+
+function Failover({ lab, link, deployed, down, notify }) {
+  const [job, setJob] = useState(null);
+  const poll = async () => {
+    const js = await api.failoverJobs(lab.name).catch(() => []);
+    const j = js.find((x) => x.link === link.id) || null;
+    setJob(j);
+    return j;
+  };
+  useEffect(() => { setJob(null); poll(); }, [link.id]); // eslint-disable-line
+  useEffect(() => {
+    if (!job || !["starting", "running"].includes(job.state)) return;
+    const t = setInterval(poll, 1500);
+    return () => clearInterval(t);
+  }, [job?.id, job?.state]); // eslint-disable-line
+  const r = job?.result;
+  const sec = (g) => (!g ? "–" : !g.recovered ? "no recovery" : g.outage < 0.3 ? "no loss" : `${g.outage.toFixed(1)} s (${g.lost} lost)`);
+  return (
+    <section>
+      <h4>Failover test</h4>
+      <p className="hint">Pings between hosts 5 times a second, takes this cable down until traffic recovers, brings it back, and reports the outage per flow and which routes moved.</p>
+      <div className="row">
+        <button disabled={!deployed || down || ["starting", "running"].includes(job?.state)} onClick={async () => {
+          try { setJob(await api.failover(lab.name, link.id)); } catch (e) { notify(e.message, null, "bad"); }
+        }}><Icon name="zap" size={14} /> {["starting", "running"].includes(job?.state) ? `Running: ${job.step}…` : "Run failover test"}</button>
+      </div>
+      {job?.state === "failed" && <p className="error">{job.error}</p>}
+      {job?.notes?.map((n) => <p key={n} className="hint">{n}</p>)}
+      {r && <>
+        <table className="grid compact fo"><thead><tr><th>Flow</th><th>On failure</th><th>On restore</th></tr></thead>
+          <tbody>{r.flows.map((x) => <tr key={x.src + x.dst}><td>{x.src} → {x.dst}</td>
+            <td className={x.on_failure.recovered ? "" : "error"}>{sec(x.on_failure)}</td><td className={x.on_restore.recovered ? "" : "error"}>{sec(x.on_restore)}</td></tr>)}</tbody></table>
+        {[["Routes that changed when it failed", r.routes_on_failure], ["…and when it came back", r.routes_on_restore]].map(([t, rows]) => rows.length > 0 && (
+          <details key={t}><summary>{t} ({rows.reduce((n, x) => n + x.lost.length + x.new.length + x.moved.length, 0)})</summary>
+            {rows.map((x) => <div key={x.router} className="small"><b>{x.router}</b>
+              {x.moved.map((m) => <div key={m.prefix} className="mono">{m.prefix}: {m.from} → {m.to}</div>)}
+              {x.lost.map((pf) => <div key={pf} className="mono error">{pf}: gone</div>)}
+              {x.new.map((pf) => <div key={pf} className="mono">{pf}: new</div>)}</div>)}
+          </details>))}
+        {!r.routes_on_failure.length && <p className="hint">No routing changes: traffic didn't depend on this cable, or the network has no alternative path.</p>}
+      </>}
+    </section>
   );
 }

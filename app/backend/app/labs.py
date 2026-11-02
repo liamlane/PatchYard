@@ -342,9 +342,12 @@ def save(lab: dict):
             raise ValueError(f"unknown cable media {l.get('media')}")
     for n in lab.get("nodes", []):
         check_name(n["id"])
-        if n.get("type") not in ("router", "switch", "pc", "server", "firewall"):
+        if n.get("type") not in ("router", "switch", "pc", "server", "firewall", "isp", "internet"):
             raise ValueError(f"unknown device type {n.get('type')}")
         hardware.validate(n, lab.get("links", []))
+        if n["type"] in ("isp", "internet") and not n.get("raw"):
+            from . import isp
+            isp.validate(n)
         if n["type"] == "firewall" and not n.get("raw"):
             firewall.normalise(n.get("props") or {})
         if n["type"] == "server" and not n.get("raw"):
@@ -352,6 +355,9 @@ def save(lab: dict):
         if n["type"] == "router" and not n.get("raw") and l3.has_l3(n.get("props") or {}):
             pr = n.get("props") or {}
             l3.normalise_nat(pr.get("nat") or {}, l3.normalise_acls(pr.get("acls") or {}))
+    if any(n.get("type") in ("isp", "internet") for n in lab.get("nodes", [])):
+        from . import isp
+        isp.validate_lab(lab)
     anns = []
     for a in lab.get("annotations", []) or []:
         if a.get("kind") not in ("note", "area") or not re.fullmatch(r"ann-[\w-]{1,40}", str(a.get("id", ""))):
@@ -615,6 +621,10 @@ def write_node_files(lab: dict, node: dict):
     wd = workdir(lab)
     nid = node["id"]
     t = node["type"]
+    if t in ("isp", "internet"):
+        from . import isp
+        isp.write_files(lab, node)
+        return
     if t == "switch":
         write_inplace(wd / "configs" / nid / "switch.sh", switch_script(node))
     if t == "router":
@@ -658,6 +668,9 @@ def clab_node(lab: dict, node: dict) -> dict:
         return {"kind": "linux", "image": props.get("image") or _d("frr_image"),
                 "binds": [f"configs/{nid}:/etc/frr"],
                 "exec": ROUTER_EXEC + loopback_exec(props) + router_subif_exec(props) + extra}
+    if t in ("isp", "internet"):
+        from . import isp
+        return isp.clab_node(lab, node, props.get("image") or _d("frr_image"), ROUTER_EXEC)
     if t == "switch":
         pre = ["apk add --no-cache iproute2 openvswitch"] if props.get("engine") == "ovs" else SWITCH_EXEC[:1]
         return {"kind": "linux", "image": _d("alpine_image"), "cmd": "tail -f /dev/null",

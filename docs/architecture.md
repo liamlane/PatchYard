@@ -204,8 +204,35 @@ Everything is measured from the host side, so nothing extra is installed in the 
 ## Fault injection, traffic, Simulation
 
 - **Faults** apply to one or both ends of a cable, using `tc qdisc ... netem` inside the device's namespace through `nsenter`. Options are delay, jitter, loss, rate, duplication and corruption. Link down/up and flap set the interface state. The presets are combinations of these values.
-- **Traffic generator** starts `iperf3 -s` in the destination's namespace and `iperf3 -c` in the source's. Results (throughput, retransmits, or loss and jitter for UDP) come back as JSON.
+- **Traffic generator** starts `iperf3 -s` in the destination's namespace and `iperf3 -c` in the source's. Results (throughput, retransmits, or loss and jitter for UDP) come back as JSON. The VoIP profile sends 87.2 kb/s of 172-byte UDP packets (one G.711 call) with a parallel ping, and turns delay, jitter and loss into an R-factor and MOS with a simplified ITU-T G.107 E-model.
 - **Simulation** runs tcpdump on the lab's ports. scapy decodes the frames (Ethernet, ARP, IP, ICMP, TCP/UDP, DNS, HTTP, OSPF, BGP, LDP, MPLS), and the UI replays them as animated steps on the canvas with per-packet details.
+
+## ISP and Internet devices
+
+`isp.py`. Both types run the FRR image plus `dnsmasq`, `nginx`, `iperf3` and `nftables` (installed at start, before the management default route is removed). Nothing about them is stored except their props; `isp.plan(lab)` derives everything from the cabling on every deploy and every **Apply**:
+
+- **Customer ports** (cable to a router, firewall or PC): each `ethN` gets an 8-address block from the provider's pool (default `81.{10k}.0.0/16` for the k-th ISP). Static: a /30, provider `.1`, customer `.2`. DHCP: a /29 served by dnsmasq on that port. BGP: a /30 plus an eBGP session with `default-originate`; the provider accepts whatever the customer announces (no filtering, so route leaks are yours to try). A routed /29 or /28 comes from the top half of the pool and is routed to the customer address.
+- **Transit** (provider to provider): /30s from `100.100.0.0/16`, eBGP both ways. The Internet node (AS 64496, `203.0.113.0/24`) default-originates to its ISPs, and ISPs announce their pools.
+- **Public services** live on the Internet node, or on an ISP not cabled to one: the resolver addresses `1.1.1.1`, `8.8.8.8`, `9.9.9.9` and the site addresses in `198.18.0.0/15` are loopbacks, dnsmasq answers for the site names, nginx serves the pages (`whatismyip` returns `$remote_addr`) and `iperf3 -s` runs on the speedtest address.
+- **Uplink real** keeps the management default route and masquerades everything else out of `eth0`; dnsmasq then forwards unknown names upstream. The sandbox egress firewall still applies, so it only reaches the internet for owners with lab internet.
+
+Files: `configs/<id>/frr.conf` and `configs/<id>/isp/` (`isp.sh`, `dnsmasq.conf`, `nginx.conf`, `nat.nft`). **Apply** rewrites them and runs `frr-reload.py` (falling back to `vtysh -f`) and `isp.sh` in the container. Cabling a new customer to a running provider applies it automatically.
+
+## Path explainer, tickets, failover, baseline
+
+- **Explain** (`trace.py`) asks each device's kernel for its decision (`ip -j route get` in its namespace through `nsenter`), finds the owner of the next hop from `ip -j addr`, walks switches between them by BFS over cables (VLAN-aware), and evaluates ACLs (`l3.parse_entry`, reply-aware for `established` and echo-reply), firewall zones and rules (stateful replies allowed) and NAT from the device's configuration. It then traces the reply from the destination to the (possibly translated) source. Nothing is sent.
+- **Tickets** (`tickets.py`) pick a pair of hosts that can reach each other, trace the path, choose a fault on it (shutdown, mask, OSPF network, ACL `TKTnnn`, static route, PC gateway, switch port to VLAN 999), apply it through the IOS batch runner or device props, and store the ticket (with the undo) in `ticket.json` in the lab folder, not `lab.json`. Check reuses the challenge checker (ping between the pair).
+- **Failover** (`failover.py`) runs `ping -D -i 0.2` per pair inside the namespaces, records routing tables, sets the link down with the same code as the cable panel, waits for every flow to answer again (60 s max), records again, restores, and computes outages from the timestamped replies.
+- **Baseline** (`baseline.py`) stores routes, neighbour states and the reachability matrix in `baseline.json`; compare diffs a fresh capture against it.
+- **Network tests** (`watch.py`) run a challenge's checks every `challenge.watch` minutes for deployed labs; failing ones feed the alert engine as the synthetic rule *Network test failed*.
+- **Idle stop** (`watch.py`): the auth middleware stamps a lab as used on any lab API call or console; every two minutes, labs unused for `users.idle_stop_minutes` are destroyed (running configs saved first) and the owner is emailed.
+
+## Importers and API tokens
+
+- **IOS import** (`iosimport.py`) parses running-configs into interfaces, VLANs, routing, ACLs and NAT, creates one device per config (switches when there are switchports and no routed interfaces), cables interfaces that share a subnet (a switch for three or more) or whose descriptions name each other, and writes FRR configs plus ACL/NAT/interface props. Every line not translated goes in the report.
+- **NetBox import** (`netbox.py`, admins only) reads devices, interfaces, cables and IP addresses for a site or tag over the REST API (token used once, not stored), maps roles to device types and builds the lab. 60 devices at most.
+- **API tokens**: `pyt_…`, stored as a SHA-256 hash with a label, created and last-used times. The middleware accepts `Authorization: Bearer`; tokens can't call `/api/auth/*` or the admin user API, and don't trigger the 2FA setup redirect.
+- **containerlab YAML**: `GET /api/labs/<lab>/clab.yml` returns the generated topology.
 
 ## Challenges
 
@@ -348,3 +375,6 @@ On the host, `deploy/update.sh` pulls the new image and recreates the container.
 - Metrics come from the host and are per-container. They measure the Linux datapath, not a vendor ASIC.
 - The disk allowance counts lab folders. A container's own writable layer (packages installed from a shell) is in Docker's storage and isn't counted.
 - Challenge checks are run by the lab's owner, who can also read them in the editor. They're for practice, not exams.
+- The Internet node is a few hundred routes, not a full table. "Real" uplink needs lab internet for the owner and still goes through the sandbox egress firewall.
+- The path explainer evaluates IPv4 only, and models ACLs, firewall rules and NAT from configuration; it doesn't see ARP, MTU or host firewalls.
+- IOS import doesn't translate DHCP pools, HSRP/VRRP, QoS, crypto or route-maps; they're listed in the report.

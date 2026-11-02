@@ -154,6 +154,22 @@ const SECTIONS = [
       </ul>
       <p>The Command Prompt and browser need the lab deployed.</p>
     </> },
+  { id: "isp", group: "Devices", title: "ISPs and the Internet", icon: "globe", kw: "isp internet provider wan uplink broadband dhcp bgp transit peering asn public dns 8.8.8.8 website speedtest whatismyip real internet nat outbound",
+    body: () => <>
+      <p>Two devices give your lab an internet to connect to. Drag them from the palette (keys <kbd>6</kbd> and <kbd>7</kbd>).</p>
+      <ul>
+        <li><b>ISP:</b> a service provider. Cable a router, firewall or PC to any of its ports and that port becomes a customer connection. Choose the service per port on its <B>Config</B> tab:
+          <ul><li><b>Static /30:</b> the ISP takes the first address, you get the second and a default route via the ISP.</li>
+            <li><b>DHCP (broadband):</b> the ISP hands out an address, gateway and DNS, like a home broadband line. For a PC or server cabled straight to the ISP (set it to DHCP in IP Configuration); routers and firewalls have no DHCP client, so give them Static or BGP.</li>
+            <li><b>BGP:</b> a /30 plus an eBGP session; the ISP sends you a default route and accepts your prefixes.</li>
+            <li><b>Routed block:</b> optionally a /29 or /28 of public addresses routed to you, for NAT pools or a DMZ.</li></ul>
+          Each port shows exactly what to configure, the IOS commands to do it, and a <B>Configure … for me</B> button for routers.</li>
+        <li><b>Internet:</b> the core. Cable ISPs to it and they peer with it over eBGP (and with each other, if you cable two ISPs together), so customers of one ISP can reach customers of another. Build a dual-homed site, a multi-ISP BGP lab or your own provider network.</li>
+        <li><b>Public services:</b> the Internet node (or an ISP with no Internet node) answers on <code>1.1.1.1</code>, <code>8.8.8.8</code> and <code>9.9.9.9</code> for DNS, and hosts <code>www.example.com</code>, <code>www.example.net</code>, <code>speedtest.example.org</code> (iperf3) and <code>whatismyip.example.com</code>, which shows the address your traffic arrived from: the quickest way to see whether your NAT works. Add your own sites with a name, address and page text.</li>
+        <li><b>Uplink:</b> <i>Simulated</i> (default) keeps everything inside the lab. <i>Real</i> masquerades anything else out to the real internet and resolves real names, if your account has lab internet on this server.</li>
+      </ul>
+      <p>Changes save at once; on a running lab press <B>Apply</B>. The CLI tab is FRR's <code>vtysh</code> (or a shell), so <code>show ip bgp</code> works as usual.</p>
+    </> },
   { id: "cli", group: "Devices", title: "IOS-style CLI", icon: "terminal", kw: "ios command conf t interface show run write memory tftp abbreviation tab completion help question mark vtysh shell enable",
     body: () => <>
       <p>Routers and switches open in <b>IOS</b> mode: Cisco-style commands translated to FRR and the switch's settings. Routers also have <b>FRR</b> (FRR's own <code>vtysh</code>) and <b>Shell</b>; firewalls have a shell. The mode switch is above the terminal.</p>
@@ -227,13 +243,41 @@ ping / traceroute / write memory / copy running-config tftp: / reload`}</Cmd>
         <li><b>Flap:</b> down, wait the number of seconds you set, then up. Ideal for timing failover.</li>
         <li><b>Impairments:</b> delay, jitter, loss, rate limit, duplication and corruption, per link.</li>
         <li><b>Presets:</b> home broadband, 4G, 3G, satellite (GEO and LEO), lossy Wi-Fi, congested WAN, intercontinental, dying link.</li>
+        <li><b>Failover test:</b> pings run between pairs of hosts (all of them, or ones you pick), the cable goes down until traffic recovers, then comes back up. The report shows, per flow, how long the outage was and how many packets were lost on failure and on restore, and which routes each router lost, gained or moved. Use it to compare OSPF timers, BFD, or static versus dynamic routing.</li>
       </ul>
     </> },
   { id: "traffic", group: "Running labs", title: "Traffic tests", icon: "flow", kw: "iperf iperf3 traffic generator bandwidth throughput udp tcp reachability matrix",
     body: () => <>
       <p>The <B>Traffic generator</B> (toolbar) runs iperf3 between any two running devices: TCP or UDP, a rate, duration, parallel streams, and reverse direction. Results show throughput, retransmits, loss and jitter.</p>
+      <p><b>VoIP call:</b> sends one G.711 call's worth of packets and measures delay alongside, then scores the call with the ITU E-model: an R-factor and a <b>MOS</b> (4.3 is as good as it gets, 4.0+ is good, under 3.6 people notice, under 3.1 they complain). Try it across a satellite or lossy Wi-Fi preset.</p>
       <p>Pair it with an impaired link or a serial WAN to see the effect, and watch the traffic overlay while it runs.</p>
       <p>The dashboard's <b>reachability matrix</b> pings every host from every other host in one go.</p>
+    </> },
+  { id: "explain", group: "Running labs", title: "Explain a path", icon: "link", kw: "path explainer why ping fails trace hop routing decision acl firewall nat reply asymmetric troubleshoot",
+    body: () => <>
+      <p><B>Explain a path</B> (toolbar, or right-click a device) answers "why can't A reach B?". Pick a source, a destination (a device, an address, or a name like <code>www.example.com</code>), a protocol and port.</p>
+      <ul>
+        <li>Every hop shows the device's real routing decision from the running lab (which route, learned how, via which next hop), the switches and VLANs the frame crosses, and any ACL, firewall rule or NAT rule that matched, by name and line.</li>
+        <li>The reply path is traced too, so asymmetric routing, a missing return route or a stateless ACL that blocks replies stands out.</li>
+        <li>Click a device in the list to find it on the canvas.</li>
+      </ul>
+      <p>It reads the lab, it sends nothing. If it says traffic gets through but ping fails, look at things it can't see: ARP, MTU, or the host's own firewall.</p>
+    </> },
+  { id: "tickets", group: "Running labs", title: "Troubleshooting tickets", icon: "bolt", kw: "ticket troubleshooting fault break random exercise practice hint give up timer",
+    body: () => <>
+      <p><B>Troubleshooting tickets</B> (toolbar) turns any working, deployed lab into practice. Patchyard breaks something realistic and gives you the user's complaint ("PC2 can't reach the file server").</p>
+      <Steps>
+        <li>Press <B>New ticket</B> (or <B>Hard ticket</B> for two faults at once). The timer starts.</li>
+        <li>Investigate like you would at work: ping, show commands, the dashboard, <B>Explain the path</B>.</li>
+        <li>Fix it with real configuration, then press <B>Check</B>. It passes when the original traffic works again, however you fixed it.</li>
+        <li>Stuck? Up to three hints, each more specific. <B>Give up</B> reveals the fault and undoes it.</li>
+      </Steps>
+      <p>Faults include a shut interface, a wrong mask or gateway, a switch port in the wrong VLAN, a missing OSPF network, a stray ACL and a deleted static route. Save configs or take a snapshot first if you want the original back exactly.</p>
+    </> },
+  { id: "rehearsal", group: "Running labs", title: "Change rehearsal and network tests", icon: "diff", kw: "baseline compare change rehearsal before after diff routes neighbours continuous test watch monitor intent",
+    body: () => <>
+      <p><b>Change rehearsal</b> (Dashboard): press <B>Take baseline</B> to record every router's routes, every OSPF/BGP/LDP neighbour and which hosts can reach which. Make your change, then <B>Compare with now</B>: you get exactly what it did: routes gained, lost or moved to a new next hop, neighbours that dropped, and host pairs that broke or got fixed. Practise a maintenance window before doing it for real.</p>
+      <p><b>Network tests:</b> a challenge's checks can run on their own. In the challenge editor set <i>Network tests</i> to every 1, 5, 15 or 60 minutes. While the lab is deployed, a failing check raises the alert <i>Network test failed</i> (bell, email, phone, Teams, wherever your alerts go) and clears when it passes. Use it as "this must always be true" for your lab.</p>
     </> },
   { id: "sim", group: "Running labs", title: "Simulation mode", icon: "sim", kw: "simulation packet capture pdu step play event list osi layers",
     body: () => <>
@@ -254,6 +298,9 @@ ping / traceroute / write memory / copy running-config tftp: / reload`}</Cmd>
         <li><b>Templates:</b> twelve ready-made labs with working configs and notes: OSPF triangle, OSPF multi-area, BGP between three ASes, serial WAN hub-and-spoke, router-on-a-stick, campus with STP, campus RSTP + LACP, NAT and ACLs at the edge, central DHCP with relay, small office, firewall edge with DMZ, and dual-ISP MPLS L3VPN.</li>
         <li><b>Snapshots:</b> save, diff and restore.</li>
         <li><b>Clone · export · import:</b> copy a lab, download it as a zip, or import a zip someone sent you.</li>
+        <li><b>Import Cisco IOS configs</b> (Share tab): paste <code>show running-config</code> from real routers and switches and get a lab: devices, cables worked out from shared subnets and descriptions, interfaces, routing, ACLs, NAT and VLANs. Lines it can't translate are listed.</li>
+        <li><b>Import from NetBox</b> (admins): a site or tag becomes a lab with its devices, cables and addresses.</li>
+        <li><b>containerlab YAML</b> (Share tab): download the topology Patchyard deploys, to keep in git or run elsewhere.</li>
       </ul>
     </> },
 
@@ -385,6 +432,18 @@ end`}</Cmd></li>
         <li><b>Lab internet:</b> on a shared server, lab devices can't reach the internet, except the package mirrors servers and firewalls need when they start. Lab-to-lab traffic inside your lab is unaffected.</li>
       </ul>
     </> },
+  { id: "api", group: "Your account", title: "API tokens and automation", icon: "terminal", kw: "api token bearer script ci automation curl rest deploy",
+    body: () => <>
+      <p>Account and password → <B>API tokens</B>. Create one, copy it (it's shown once) and send it as a bearer token. It acts as you on the lab API, but can't change your password, 2FA or tokens.</p>
+      <Cmd>{`T=pyt_…
+H="Authorization: Bearer $T"
+curl -H "$H" ${location.origin}/api/labs                         # your labs
+curl -H "$H" -X POST ${location.origin}/api/labs/LAB/deploy       # deploy
+curl -H "$H" -X POST ${location.origin}/api/labs/LAB/challenge/check   # run its checks
+curl -H "$H" ${location.origin}/api/labs/LAB/clab.yml             # containerlab topology
+curl -H "$H" -X POST ${location.origin}/api/labs/LAB/destroy`}</Cmd>
+      <p>Revoke a token any time; anything using it stops at once.</p>
+    </> },
   { id: "admin", group: "Your account", title: "Running the server (admins)", icon: "gear", kw: "admin users requests approve invite link role disable reset password quota trusted sandbox mirrors backup update",
     when: (p) => p.me?.role === "admin",
     body: () => <>
@@ -394,10 +453,11 @@ end`}</Cmd></li>
         <li><b>Requests:</b> people who asked from the sign-in page. Approve creates the account with the username and password they chose; decline tells them when they next try to sign in. Turn requests off under Limits & sandbox.</li>
         <li><b>Invites:</b> one-time links that create an account directly, with a role and an expiry. Give an email address and Patchyard sends the link.</li>
         <li><b>All labs:</b> every lab and its owner. Open, destroy, move to another user, or mark a lab trusted (runs privileged, outside the sandbox: only for your own labs).</li>
-        <li><b>Limits & sandbox:</b> default limits, allowed images, package mirrors, the management address pool.</li>
+        <li><b>Limits & sandbox:</b> default limits, allowed images, package mirrors, the management address pool, and <b>idle labs</b>: destroy a lab nobody has used for N minutes (configs saved first, owner emailed) to keep memory free.</li>
         <li><b>Email:</b> your mail provider's SMTP details, which emails to send, and <B>Send test email</B>. The status line only says "Working" after a test was delivered with the settings as they are now.</li>
         <li><b>Alert channels:</b> ntfy (phone push), Microsoft Teams, Slack or any JSON webhook, each with a minimum severity, a lab filter, resolved messages on or off, and quiet hours that critical alerts can break. Each alert rule can be sent to one channel or to the bell only (Settings → Alert rules → Send to). <B>Send test</B> checks a channel.</li>
         <li><b>Two-factor:</b> Limits & sandbox → Sign-in sets who must use it (automatic = admins on a public server). Users → Remove 2FA helps someone who lost their phone.</li>
+        <li><b>Import from NetBox:</b> Lab manager → Share.</li>
         <li><b>Audit log:</b> sign-ins (and failed ones), account, invite and settings changes, labs created, deployed and deleted.</li>
       </ul>
       <h4>On the host</h4>

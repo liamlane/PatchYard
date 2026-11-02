@@ -46,6 +46,7 @@ const P = {
   alignL: "M4 3v18M8 7h12v4H8zM8 14h8v4H8z", alignC: "M12 3v18M6 7h12v4H6zM8 14h8v4H8z", alignR: "M20 3v18M4 7h12v4H4zM8 14h8v4H8z",
   alignT: "M3 4h18M7 8h4v12H7zM14 8h4v8h-4z", alignM: "M3 12h18M7 5h4v14H7zM14 8h4v8h-4z", alignB: "M3 20h18M7 4h4v12H7zM14 8h4v8h-4z",
   distH: "M4 4v16M20 4v16M9 8h6v8H9z", distV: "M4 4h16M4 20h16M8 9h8v6H8z", flow: "M3 8h12l-3-3M21 16H9l3 3",
+  globe: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM3 12h18M12 3c2.5 2.5 3.8 5.5 3.8 9s-1.3 6.5-3.8 9M12 3C9.5 5.5 8.2 8.5 8.2 12s1.3 6.5 3.8 9",
   link: "M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1",
   bolt: "M13 2L4 14h7l-1 8 9-12h-7z", trash: "M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3", terminal: "M4 5h16v14H4zM7 9l3 3-3 3M12 15h5",
   window: "M3 4h18v16H3zM3 8h18", plus: "M12 5v14M5 12h14", help: "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM9.5 9a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.7v.5M12 17h.01",

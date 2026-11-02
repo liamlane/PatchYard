@@ -7,7 +7,7 @@ from fastapi import FastAPI, HTTPException, WebSocket, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from . import labs, devices, metrics, monitor, impair, labmgmt, templates, settings, alerts, live, traffic, auth, hardware, reach, cfgstate, l3, system, users, sandbox, proxy
-from . import mailer, audit, challenges, notify, channels
+from . import mailer, audit, challenges, notify, channels, watch
 from .version import VERSION, COMMIT
 from .capture import capture_for
 from .console import console
@@ -28,6 +28,12 @@ def lock(lab):
 @app.exception_handler(ValueError)
 async def _ve(_: Request, e: ValueError):
     return JSONResponse({"detail": str(e)}, status_code=400)
+
+
+@app.exception_handler(RuntimeError)
+async def _rt(_: Request, e: RuntimeError):
+    """A command inside a device failed (usually: it isn't running). Say what happened instead of a bare 500."""
+    return JSONResponse({"detail": str(e)[:500] or "device command failed"}, status_code=502)
 
 
 @app.exception_handler(FileNotFoundError)
@@ -52,6 +58,8 @@ async def lifespan(_app):
         tasks.append(asyncio.create_task(notify.alert_digest_loop()))
         tasks.append(asyncio.create_task(notify.disk_watch_loop()))
         tasks.append(asyncio.create_task(channels.loop()))
+        tasks.append(asyncio.create_task(watch.tests_loop()))
+        tasks.append(asyncio.create_task(watch.idle_loop(_idle_stop)))
         await proxy.start()
         fw = await sandbox.refresh_firewall()
         if fw:
@@ -60,6 +68,10 @@ async def lifespan(_app):
     await proxy.stop()
     for t in tasks:
         t.cancel()
+
+
+async def _idle_stop(name: str):
+    await api_destroy(name)
 
 
 async def _restore_l3():
@@ -1388,6 +1400,211 @@ async def api_node_ios(lab: str, node: str, body: dict):
     if n["type"] == "router" and (await container_states(lab)).get(node) != "running":
         raise HTTPException(409, "deploy the lab (and power the router on) to change its configuration")
     return await ios.run_batch(ios.Env(lab, node), cmds)
+
+
+@app.get("/api/labs/{lab}/nodes/{node}/isp")
+async def api_isp_plan(lab: str, node: str):
+    """A provider's addressing, peers and what each customer needs to configure."""
+    from . import isp
+    d = labs.load(lab)
+    n = node_of(d, node)
+    if n["type"] not in isp.PROVIDERS:
+        raise HTTPException(400, f"{node} isn't an ISP or internet node")
+    o = isp.plan(d)[node]
+    for p in o["ports"]:
+        p["help"] = isp.customer_help(o, p, d)
+    leases = []
+    f = labs.workdir(d) / "configs" / node / "isp" / "leases"
+    if f.exists():
+        leases = labs.leases(f.read_text())
+    return {**o, "leases": leases, "running": (await container_states(lab)).get(node) == "running",
+            "internet_ok": _lab_has_internet(d)}
+
+
+def _lab_has_internet(d: dict) -> bool:
+    """Would a real-internet uplink actually get out on this server?"""
+    if not sandbox.active(d):
+        return True
+    u = users.get(d.get("owner") or "") or {}
+    return bool(u.get("role") == "admin" or u.get("internet"))
+
+
+@app.post("/api/labs/{lab}/nodes/{node}/isp/apply")
+async def api_isp_apply(lab: str, node: str):
+    from . import isp
+    d = labs.load(lab)
+    node_of(d, node)
+    return {"ok": True, "notes": await isp.apply(d)}
+
+
+@app.post("/api/labs/{lab}/nodes/{node}/isp/configure")
+async def api_isp_configure(lab: str, node: str, body: dict):
+    """Configure the customer router on one ISP port for the user (WAN address, default route or BGP)."""
+    from . import isp, ios
+    d = labs.load(lab)
+    o = isp.plan(d)[node_of(d, node)["id"]]
+    p = next((x for x in o["ports"] if x["if"] == body.get("port")), None)
+    if not p:
+        raise HTTPException(404, "no customer on that port")
+    peer = node_of(d, p["peer"])
+    if peer["type"] == "router" and not peer.get("raw"):
+        if (await container_states(lab)).get(peer["id"]) != "running":
+            raise HTTPException(409, f"deploy the lab first: {peer['id']} isn't running")
+        if p["mode"] == "bgp":               # the router already runs BGP: peer with its AS rather than start a second one
+            have = ((await cfgstate.state(d, peer)).get("bgp") or {}).get("asn")
+            if have and have != p["customer_as"]:
+                def setas(pr, ifn=p["if"], asn=have):
+                    pr.setdefault("ports", {}).setdefault(ifn, {}).update(customer_as=str(asn))
+                labs.patch_props(lab, node, setas)
+                d = labs.load(lab)
+                o = isp.plan(d)[node]
+                p = next(x for x in o["ports"] if x["if"] == body.get("port"))
+                await isp.apply(d, node)
+    h = isp.customer_help(o, p, d)
+    if peer["type"] == "router" and not peer.get("raw"):
+        r = await ios.run_batch(ios.Env(lab, peer["id"]), ["configure terminal"] + h["ios"] + ["end", "write memory"])
+        return {"ok": r["ok"], "errors": r["errors"], "transcript": r["transcript"][-3000:]}
+    if peer["type"] in ("pc", "server", "firewall"):
+        return {"ok": False, "errors": [f"set {peer['id']}'s {h['peer_name']} yourself: {h['text']}"]}
+    raise HTTPException(400, f"{peer['id']} can't be configured automatically")
+
+
+# ---------------- path explainer, tickets, failover, baseline ----------------
+@app.post("/api/labs/{lab}/explain")
+async def api_explain(lab: str, body: dict):
+    from . import trace
+    d = labs.load(lab)
+    dport = body.get("port")
+    return await trace.explain(d, check_name(str(body.get("src") or "")), str(body.get("target") or ""),
+                               str(body.get("proto") or "icmp"), int(dport) if str(dport or "").isdigit() else None)
+
+
+@app.get("/api/labs/{lab}/ticket")
+async def api_ticket(lab: str):
+    from . import tickets
+    return tickets.public(tickets.load(labs.load(lab))) or {}
+
+
+@app.post("/api/labs/{lab}/ticket")
+async def api_ticket_new(lab: str, body: dict):
+    from . import tickets
+    d = labs.load(lab)
+    async with lock(lab):
+        t = await tickets.create(d, "hard" if body.get("level") == "hard" else "normal")
+    audit.record("ticket.new", lab, t["level"])
+    return t
+
+
+@app.post("/api/labs/{lab}/ticket/{action}")
+async def api_ticket_action(lab: str, action: str):
+    from . import tickets
+    d = labs.load(lab)
+    if action == "check":
+        r = await tickets.check(d)
+        if r["ticket"].get("solved"):
+            audit.record("ticket.solved", lab, f"{r['ticket'].get('minutes')} min")
+        return r
+    if action == "hint":
+        return tickets.hint(d)
+    if action == "give-up":
+        async with lock(lab):
+            return await tickets.give_up(d)
+    if action == "close":
+        tickets.close(d)
+        return {"ok": True}
+    raise HTTPException(404, "unknown action")
+
+
+@app.post("/api/labs/{lab}/failover")
+async def api_failover(lab: str, body: dict):
+    from . import failover
+    d = labs.load(lab)
+    if not await container_states(lab):
+        raise HTTPException(409, "deploy the lab first")
+    return failover.start(d, str(body.get("link") or ""), body.get("pairs"))
+
+
+@app.get("/api/labs/{lab}/failover")
+async def api_failover_jobs(lab: str):
+    from . import failover
+    labs.load(lab)
+    return failover.list_jobs(lab)
+
+
+@app.get("/api/labs/{lab}/baseline")
+async def api_baseline(lab: str):
+    from . import baseline
+    return baseline.get(labs.load(lab)) or {}
+
+
+@app.post("/api/labs/{lab}/baseline")
+async def api_baseline_take(lab: str):
+    from . import baseline
+    return await baseline.take(labs.load(lab))
+
+
+@app.post("/api/labs/{lab}/baseline/compare")
+async def api_baseline_compare(lab: str):
+    from . import baseline
+    return await baseline.compare(labs.load(lab))
+
+
+@app.get("/api/labs/{lab}/clab.yml")
+async def api_clab_yaml(lab: str):
+    """The generated containerlab topology (topology as code)."""
+    d = labs.load(lab)
+    p = labs.generate(d)
+    return Response(p.read_text(), media_type="text/yaml", headers={"Content-Disposition": f'attachment; filename="{lab}.clab.yml"'})
+
+
+# ---------------- importers ----------------
+@app.post("/api/import/ios")
+async def api_import_ios(body: dict):
+    from . import iosimport
+    quota_new_lab()
+    quota_disk()
+    configs = [str(c)[:500_000] for c in (body.get("configs") or [])][:40]
+    r = await asyncio.to_thread(iosimport.build, check_name(str(body.get("name") or "")), configs)
+    d = own_new(r["lab"]["name"])
+    try:
+        quota_devices(d)
+    except HTTPException:
+        labs.delete(d["name"])
+        raise
+    audit.record("lab.create", d["name"], f"IOS import ({r['devices']} devices)")
+    return {**r, "lab": d}
+
+
+@app.post("/api/admin/import/netbox")
+async def api_import_netbox(body: dict):
+    from . import netbox
+    r = await asyncio.to_thread(netbox.build, check_name(str(body.get("name") or "")), str(body.get("url") or ""), str(body.get("token") or ""),
+                                str(body.get("site") or ""), str(body.get("tag") or ""))
+    d = own_new(r["lab"]["name"])
+    audit.record("lab.create", d["name"], f"NetBox import ({r['devices']} devices)")
+    return {**r, "lab": d}
+
+
+# ---------------- API tokens ----------------
+@app.get("/api/auth/tokens")
+async def api_tokens():
+    return users.list_tokens(_me_or_401())
+
+
+@app.post("/api/auth/tokens")
+async def api_token_create(body: dict):
+    me = _me_or_401()
+    t = users.create_token(me, str(body.get("label") or ""))
+    audit.record("token.create", me, str(body.get("label") or ""))
+    return {"token": t}
+
+
+@app.delete("/api/auth/tokens/{tid}")
+async def api_token_revoke(tid: str):
+    me = _me_or_401()
+    users.revoke_token(me, tid)
+    audit.record("token.revoke", me, tid)
+    return {"ok": True}
 
 
 @app.post("/api/labs/{lab}/reachability")

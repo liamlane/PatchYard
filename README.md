@@ -6,6 +6,7 @@ A self-hosted network lab that looks and feels like Packet Tracer but runs real 
 - **Switches** are 802.1Q bridges with STP, or Open vSwitch with RSTP and LACP.
 - **Firewalls** run nftables.
 - **Servers** run real DHCP, DNS, HTTP, FTP, TFTP, Syslog and NTP.
+- **ISPs and an Internet core** give your lab somewhere to connect to: static, DHCP or BGP customer links, provider peering, public DNS and websites, and optionally the real internet.
 
 You build, configure, break and watch it all from a browser, with an IOS-style CLI on every router and switch.
 
@@ -111,6 +112,12 @@ A Services tab with a page per service, each with an On/Off switch and a running
 - Take links down or make them flap, and add delay, jitter, loss, rate limits and corruption, with presets.
 - Run iperf3 traffic tests and a reachability matrix.
 - Step through real captured packets in Simulation mode.
+- **Explain a path:** why A can or can't reach B, hop by hop, with the route, ACL line, firewall rule or NAT that decided it, both ways.
+- **Troubleshooting tickets:** Patchyard breaks something realistic in a working lab and hands you the user's complaint.
+- **Failover test:** fail a cable on purpose and get the outage per flow and the routes that moved.
+- **Change rehearsal:** baseline the network, make a change, see exactly what it changed.
+- **Network tests:** a lab's checks run on a schedule and alert when they fail.
+- **VoIP call quality:** MOS and R-factor for a simulated call across your network.
 
 ### Share a server
 
@@ -125,6 +132,7 @@ A Services tab with a page per service, each with an On/Off switch and a running
 - **Two-factor sign-in** with an authenticator app and recovery codes, required for admins on a public server.
 - **Alert channels:** phone push (ntfy), Microsoft Teams, Slack and webhooks, with quiet hours.
 - **Audit log** and a **disk allowance** per user.
+- **Idle labs** can be stopped automatically to keep memory free.
 
 ### Manage
 
@@ -140,6 +148,8 @@ A Services tab with a page per service, each with an On/Off switch and a running
   - firewall edge with DMZ,
   - dual-ISP MPLS L3VPN.
 - **Labs:** snapshots with diff and restore, clone, and zip export and import.
+- **Import real configs:** paste Cisco IOS running-configs (or point at NetBox, admins) and get a lab with the cabling worked out.
+- **Automation:** personal API tokens and a containerlab YAML for every lab.
 - **Access:** an admin login.
 - **Challenges:** Packet Tracer-style activities with instructions and a Check button that scores the running lab. Five built in, with a leaderboard; make your own from any lab, share them as zips or publish them to everyone on the server ([docs/challenges.md](docs/challenges.md)).
 - **Help:** a built-in, searchable how-to guide covering every feature, with step-by-step walkthroughs.

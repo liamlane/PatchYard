@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { labIf } from "./hw.js";
 import { api } from "./api.js";
 import { Sparkline, StateChip, fmtBps, fmtBytes, fmtPct, useInterval, Icon } from "./ui.jsx";
@@ -49,6 +49,7 @@ export default function Dashboard({ lab, states, live, linkHist, log, onFocusNod
       </div>
 
       <Reachability lab={lab} running={running} onFocusNode={onFocusNode} />
+      <Baseline lab={lab} running={running} />
 
       {routers.length > 0 && (
         <section className="dash-sec">
@@ -140,6 +141,48 @@ function Reachability({ lab, running, onFocusNode }) {
           </table>
         </div>
       )}
+    </section>
+  );
+}
+
+function Baseline({ lab, running }) {
+  const [b, setB] = useState(null);
+  const [d, setD] = useState(null);
+  const [busy, setBusy] = useState("");
+  const [err, setErr] = useState("");
+  useEffect(() => { setD(null); api.baseline(lab.name).then((x) => setB(x && x.ts ? x : null)).catch(() => {}); }, [lab.name]);
+  const run = async (k) => {
+    setBusy(k); setErr("");
+    try {
+      if (k === "take") { setB(await api.baselineTake(lab.name)); setD(null); }
+      else setD(await api.baselineCompare(lab.name));
+    } catch (e) { setErr(e.message); }
+    setBusy("");
+  };
+  const t = (ts) => new Date(ts * 1000).toLocaleString();
+  const nothing = d && !d.routes.length && !d.neighbours.length && !d.reach.length;
+  return (
+    <section className="dash-sec baseline">
+      <h3>Change rehearsal <span className="hint">{b ? `baseline ${t(b.ts)} · ${b.summary.routes} routes on ${b.summary.routers} routers, ${b.summary.reachable}/${b.summary.pairs} pairs reachable` : "record the network, make your change, see exactly what it did"}</span></h3>
+      <div className="row">
+        <button disabled={!running || !!busy} onClick={() => run("take")}>{busy === "take" ? "Recording…" : b ? "Retake baseline" : "Take baseline"}</button>
+        <button className="primary" disabled={!running || !b || !!busy} onClick={() => run("cmp")}>{busy === "cmp" ? "Comparing…" : "Compare with now"}</button>
+        {!running && <span className="hint">Deploy the lab first.</span>}
+      </div>
+      {err && <p className="error">{err}</p>}
+      {nothing && <p className="ok-t">✓ No difference: same routes, same neighbours, same reachability.</p>}
+      {d && !nothing && <>
+        {(d.broken.length > 0 || d.fixed.length > 0) && <div className="row wrap">
+          {d.broken.map((p) => <span key={p} className="schip s-bad">✗ {p}</span>)}
+          {d.fixed.map((p) => <span key={p} className="schip s-ok">✓ {p}</span>)}</div>}
+        {d.neighbours.length > 0 && <table className="grid compact"><thead><tr><th>Router</th><th>Neighbour</th><th>Before</th><th>Now</th></tr></thead>
+          <tbody>{d.neighbours.map((n, i) => <tr key={i}><td>{n.router}</td><td className="mono">{n.neighbour}</td><td>{n.before}</td><td><b>{n.after}</b></td></tr>)}</tbody></table>}
+        {d.routes.length > 0 && <table className="grid compact"><thead><tr><th>Router</th><th>Prefix</th><th /><th>Before</th><th>Now</th></tr></thead>
+          <tbody>{d.routes.slice(0, 300).map((r, i) => <tr key={i} className={`chg-${r.change}`}><td>{r.router}</td><td className="mono">{r.prefix}{r.vrf !== "default" ? ` (${r.vrf})` : ""}</td>
+            <td><span className={`schip s-${r.change === "lost" ? "bad" : r.change === "gained" ? "ok" : "warn"}`}>{r.change}</span></td>
+            <td className="mono small">{r.before || "–"}</td><td className="mono small">{r.after || "–"}</td></tr>)}</tbody></table>}
+        {d.routes.length > 300 && <p className="hint">…and {d.routes.length - 300} more route changes.</p>}
+      </>}
     </section>
   );
 }
