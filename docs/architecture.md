@@ -227,6 +227,18 @@ Files: `configs/<id>/frr.conf` and `configs/<id>/isp/` (`isp.sh`, `dnsmasq.conf`
 - **Network tests** (`watch.py`) run a challenge's checks every `challenge.watch` minutes for deployed labs; failing ones feed the alert engine as the synthetic rule *Network test failed*.
 - **Idle stop** (`watch.py`): the auth middleware stamps a lab as used on any lab API call or console; every two minutes, labs unused for `users.idle_stop_minutes` are destroyed (running configs saved first) and the owner is emailed.
 
+## Sharing, classroom, showcase
+
+- **Shares** live in `lab.json` as `shares: {user: "edit" | "view"}` (kept server-side like `owner`). `auth.access_level()` gives owner/edit/view; the middleware turns a missing level into 404, refuses every non-GET for view (except `explain`, `reachability` and `baseline/compare`, which only read) and WebSocket consoles, and keeps sharing, hand-outs, showcase links and deletion for the owner.
+- **Hand-outs** clone the lab for each user (`<user>-<lab>`, owner = the user, `shares = {teacher: view}`, `handout_from = <lab>`), counted against the student's quota. The class view lists visible labs with that `handout_from` and reads each one's `challenge-result.json`.
+- **Showcase** stores `showcase.token` in `lab.json`; `GET /api/showcase/<token>` is open (no sign-in) and returns positions, types, a few display props, cables, notes and router configs with any line naming a password, secret, key, community, PSK, token or MD5 hidden. Unknown tokens are security events.
+
+## Time machine, chaos, Wireshark
+
+- **Time machine** (`history.py`): a loop samples running labs every `history.interval_s` (routes and neighbours as for the baseline, port states from the host) and appends to `history.jsonl` only when the sample differs from the last one; kept for `history.keep_hours`, at most 500 points. Diffs reuse `baseline.diff`.
+- **Chaos** (`chaos.py`): a background job per lab picks a random cable (not excluded, not shut) and takes it down or applies netem loss/delay through `impair`, holds 10–60 s, restores, waits about `every` seconds; a sampler runs `reach.check` every 15 s and scores kept/baseline host pairs. Cancelling restores the current fault.
+- **Wireshark:** Simulation keeps each frame's bytes, so the buffer exports as classic pcap. `GET /api/labs/<lab>/links/<id>/pcap?seconds=N` runs `tcpdump -w -` in one end's namespace under `timeout` and streams it (N=0: up to an hour).
+
 ## Importers and API tokens
 
 - **IOS import** (`iosimport.py`) parses running-configs into interfaces, VLANs, routing, ACLs and NAT, creates one device per config (switches when there are switchports and no routed interfaces), cables interfaces that share a subnet (a switch for three or more) or whose descriptions name each other, and writes FRR configs plus ACL/NAT/interface props. Every line not translated goes in the report.

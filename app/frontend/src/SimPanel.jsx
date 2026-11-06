@@ -44,6 +44,8 @@ export default function SimPanel({ lab, events, visible, cursor, setCursor, filt
         </label>
         <label className="chk"><input type="checkbox" checked={follow} onChange={(e) => setFollow(e.target.checked)} /> Follow live</label>
         <button className="link" onClick={onClear}>Clear</button>
+        <a className={`btn ${events.length ? "" : "disabled"}`} href={events.length ? api.simPcapUrl(lab.name) : undefined} download
+          title="Every captured packet as a .pcap file: open it in Wireshark">Wireshark (.pcap)</a>
       </div>
       <div className="sim-pdu">
         <span>Add Simple PDU</span>

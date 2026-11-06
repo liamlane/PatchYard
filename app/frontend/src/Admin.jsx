@@ -247,6 +247,15 @@ function Limits({ notify }) {
       <label key={k}>{l}<input className="narrow" value={s.demo?.quota?.[k] ?? ""} onChange={(e) => upd("demo", "quota", { ...(s.demo?.quota || {}), [k]: e.target.value.replace(/[^\d.]/g, "") })} /></label>))}</div>
     <p className="hint">Limits per demo visitor. Size them for your server: at once × running labs × devices × memory is the most demo visitors can use.</p>
     <DemoSessions notify={notify} />
+    <h3>Sharing</h3>
+    <label className="chk"><input type="checkbox" checked={s.users.allow_showcase !== false} onChange={(e) => upd("users", "allow_showcase", e.target.checked)} /> Let users make public showcase links (read-only, no sign-in; passwords and keys in configs are hidden)</label>
+    <h3>Time machine</h3>
+    <label className="chk"><input type="checkbox" checked={s.history?.enabled !== false} onChange={(e) => upd("history", "enabled", e.target.checked)} /> Record routes, neighbours and port states of running labs</label>
+    <div className="formrow">
+      <label>Check every<span className="nowrap"><input className="narrow" value={s.history?.interval_s ?? 30} onChange={(e) => upd("history", "interval_s", e.target.value.replace(/\D/g, ""))} /> s</span></label>
+      <label>Keep<span className="nowrap"><input className="narrow" value={s.history?.keep_hours ?? 24} onChange={(e) => upd("history", "keep_hours", e.target.value.replace(/\D/g, ""))} /> hours</span></label>
+    </div>
+    <p className="hint">Only changes are stored. Each check reads every router's routing table and neighbours, so on a busy server a longer interval is lighter.</p>
     <h3>Idle labs</h3>
     <div className="formrow"><label>Stop a lab nobody has used for<span className="nowrap"><input className="narrow" value={s.users.idle_stop_minutes ?? 0} onChange={(e) => upd("users", "idle_stop_minutes", Number(e.target.value.replace(/\D/g, "")) || 0)} /> minutes</span></label></div>
     <label className="chk"><input type="checkbox" checked={!!s.users.idle_stop_admins} onChange={(e) => upd("users", "idle_stop_admins", e.target.checked)} /> Admins' labs too</label>

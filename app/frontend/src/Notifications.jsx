@@ -9,7 +9,7 @@ const ago = (ts) => {
 };
 const dur = (a, b) => { const s = Math.max(0, (b || Date.now() / 1000) - a); return s < 60 ? `${Math.round(s)}s` : s < 3600 ? `${Math.round(s / 60)}m` : `${(s / 3600).toFixed(1)}h`; };
 
-export function NotificationsPanel({ onClose, onGoto, notify, onSettings, refreshKey }) {
+export function NotificationsPanel({ onClose, onGoto, onTimeMachine, notify, onSettings, refreshKey }) {
   const [tab, setTab] = useState("active");
   const [rows, setRows] = useState([]);
   const load = () => api.alerts(tab === "active" ? "firing" : "").then(setRows).catch(() => {});
@@ -37,6 +37,7 @@ export function NotificationsPanel({ onClose, onGoto, notify, onSettings, refres
               <div className="hint">
                 <button className="link" onClick={() => onGoto(r.lab, r.node)}>{r.lab} · {r.node}</button>
                 {" · "}{ago(r.started)}{" · "}{r.state === "resolved" ? `lasted ${dur(r.started, r.resolved)}` : `for ${dur(r.started)}`}
+                {onTimeMachine && <>{" · "}<button className="link" title="The routes, neighbours and ports at the moment this alert fired" onClick={() => onTimeMachine(r.lab, r.started)}>network then</button></>}
               </div>
             </div>
             {r.state === "firing" && !r.acked && <button className="link" onClick={() => ack(r.id)}>Ack</button>}

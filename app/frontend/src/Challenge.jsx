@@ -32,7 +32,7 @@ export function describe(k) {
 }
 
 // Instructions: paragraphs, "- " bullets, `code` and **bold**. No HTML is ever injected.
-function Rich({ text }) {
+export function Rich({ text }) {
   const inline = (s, key) => s.split(/(`[^`]+`|\*\*[^*]+\*\*)/g).map((p, i) => (p.startsWith("`") && p.endsWith("`") && p.length > 2 ? <code key={`${key}-${i}`}>{p.slice(1, -1)}</code>
     : p.startsWith("**") && p.endsWith("**") && p.length > 4 ? <b key={`${key}-${i}`}>{p.slice(2, -2)}</b> : p));
   const blocks = (text || "").split(/\n{2,}/);

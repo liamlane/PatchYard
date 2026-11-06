@@ -319,7 +319,8 @@ def list_labs():
         except (OSError, ValueError):
             continue
         summ = {"name": d["name"], "nodes": len(d.get("nodes", [])), "links": len(d.get("links", [])),
-                "owner": d.get("owner") or "", "trusted": bool(d.get("trusted")), "challenge": bool((d.get("challenge") or {}).get("checks"))}
+                "owner": d.get("owner") or "", "trusted": bool(d.get("trusted")), "challenge": bool((d.get("challenge") or {}).get("checks")),
+                "shares": dict(d.get("shares") or {}), "handout_from": d.get("handout_from") or "", "showcase": bool((d.get("showcase") or {}).get("token"))}
         _LIST[p.name] = (st.st_mtime, st.st_size, summ)
         out.append(dict(summ))
     for k in set(_LIST) - seen:

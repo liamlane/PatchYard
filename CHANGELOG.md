@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.17.0
+- **Shared labs:** Lab manager → People & class → share a lab with other users as *can edit* or *view only*. View-only users see everything live (canvas, configs, dashboard, Explain a path) but can't change it, deploy it or open a console, and the app tells them so. Only the owner can delete a lab or change its sharing; a clone is always yours alone.
+- **Classroom:** *Hand out copies* gives each listed user their own copy of a lab (configs and challenge included), shared back to you read-only, and emails them. The **Class** table shows every copy: running or not, challenge score, best score and what's still failing.
+- **Public showcase links:** a read-only page at `/s/<token>` anyone can open without signing in: the canvas, devices, cables and router configurations with passwords, keys and SNMP communities hidden. Remove the link to stop it working; admins can turn showcase links off.
+- **Time machine:** routes, OSPF/BGP/LDP neighbours and port states of running labs are recorded every 30 s when they change and kept for a day. Dashboard → Time machine lists the change points with a summary; open one to see what changed, or compare it with now. Alerts have a *network then* link.
+- **Chaos mode:** Dashboard → Chaos mode takes cables down or adds heavy loss or delay at random for a set time, pings every host pair every 15 s and gives a resilience score. Cables can be excluded; everything is restored when it ends or you stop it.
+- **Wireshark:** the Simulation panel downloads its capture as pcap; any cable can be captured for 10 s to 5 min and downloaded; with an API token a cable streams live into Wireshark (`curl … | wireshark -k -i -`).
+- Admin → Limits & sandbox: switches for showcase links and the time machine (interval, how long to keep).
+- The self-test also checks that the time machine records a lab and that a cable can be captured to pcap.
+
 ## 0.16.3
 - **Faster self-test:** after a short head start (10–15 s) the checks run every 10 s until they all pass, instead of a fixed 40–60 s wait. A healthy OSPF triangle finishes in well under a minute.
 - **Self-test covers the ISP and Internet devices** (`--full`): pc1 on DHCP broadband, r1 set up with *Configure for me*, isp1 peering with inet1 over BGP, and checks for the DHCP lease, ping to 8.8.8.8, www.example.com and whatismyip showing the ISP address.

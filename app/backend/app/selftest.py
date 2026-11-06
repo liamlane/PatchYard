@@ -137,7 +137,7 @@ def diagnose(lab: str, nodes: list[str]):
             print(f"    log | {ln[:200]}")
 
 
-def run_lab(c: Client, tid: str, checks: list[dict], settle: int, keep: bool, retry: int = 240, build=None, after_up=None):
+def run_lab(c: Client, tid: str, checks: list[dict], settle: int, keep: bool, retry: int = 240, build=None, after_up=None, extra=None):
     """build(c, name) makes the lab (default: from template tid); after_up(c, name) runs once every device is up."""
     name = f"selftest-{tid}-{int(time.time()) % 100000}"
     print(f"\n{tid} → {name}")
@@ -207,6 +207,9 @@ def run_lab(c: Client, tid: str, checks: list[dict], settle: int, keep: bool, re
         failing = sorted({x["node"] for x, r in zip(checks, last.get("results", [])) if not r["ok"]} if last else set())
         if failing:
             diagnose(name, failing)
+        if extra:
+            for label, fn in extra:
+                step(label, lambda fn=fn: fn(c, name))
     finally:
         if not keep:
             step("destroy", lambda: c.call("POST", f"/api/labs/{name}/destroy") and "")
@@ -252,6 +255,25 @@ def _configure_r1(c, name):
     return wait(go, 60, every=5, what="r1's CLI to accept the ISP settings")
 
 
+def _tm(c, name):
+    c.call("POST", f"/api/labs/{name}/history/record")
+    pts = c.call("GET", f"/api/labs/{name}/history")["points"]
+    if not pts:
+        raise Fail("nothing recorded")
+    return f"{len(pts)} change point(s), last at {time.strftime('%H:%M:%S', time.localtime(pts[-1]['ts']))}"
+
+
+def _pcap(c, name):
+    lab = c.call("GET", f"/api/labs/{name}")
+    link = lab["links"][0]["id"]
+    req = urllib.request.Request(f"{BASE}/api/labs/{name}/links/{link}/pcap?seconds=3", headers={"cookie": c.cookie})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        data = r.read()
+    if data[:4] not in (b"\xd4\xc3\xb2\xa1", b"\xa1\xb2\xc3\xd4", b"\x4d\x3c\xb2\xa1", b"\xa1\xb2\x3c\x4d"):
+        raise Fail(f"not a pcap ({len(data)} bytes)")
+    return f"{len(data)} bytes of pcap in 3 s"
+
+
 def main(argv):
     keep, full = "--keep" in argv, "--full" in argv
     retry = 90 if "--quick" in argv else 240
@@ -286,7 +308,7 @@ def main(argv):
         {"type": "service", "node": "srv1", "service": "http"}, {"type": "service", "node": "srv1", "service": "dns"},
         {"type": "ping", "node": "pc1", "target": "192.168.3.10"},
         {"type": "http", "node": "pc1", "url": "http://www.lab", "match": "www.lab"},
-    ], settle=10, keep=keep, retry=retry)
+    ], settle=10, keep=keep, retry=retry, extra=[("time machine records the lab", _tm), ("Wireshark capture of a cable", _pcap)])
     if full:
         run_lab(c, "small-office", [
             {"type": "service", "node": "srv1", "service": s} for s in ("dhcp", "dns", "http", "ftp", "tftp", "syslog", "ntp")

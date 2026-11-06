@@ -1,14 +1,11 @@
 # Roadmap
 
-## Next (0.17.0)
-- **Time machine:** record routing, neighbour and interface state continuously and scrub back to any moment ("what did the network look like when the alert fired?").
-- **Chaos mode:** random, schedulable faults (link down, impairment, process kill) with a resilience score.
-- **Shared labs and classroom mode:** invite users to a lab (edit or read-only); instructor view of every student's lab and score.
-- **Public showcase links:** read-only share of a lab's design and configs.
-- **Live packet capture to Wireshark** (pcap download and streamed `tcpdump`).
-- **Passkeys** (WebAuthn).
-- Challenge packs and more built-ins (STP, VRRP, DHCP relay, IPv6).
-- Verify tickets, the failover test and NetBox import on a live host (routing, services and ISP/Internet devices are covered by the self-test).
+## Next (0.18.0)
+- **Passkeys** (WebAuthn) as a second factor or instead of a password.
+- **Challenge packs:** import/export a set of challenges, and more built-ins (STP, VRRP, DHCP relay, IPv6).
+- **Classroom, part two:** a class roster (groups of users), deadlines, and hand-outs that reset to the original.
+- **Time machine replay:** step the canvas through change points (ports and routes coloured as they were).
+- Verify tickets, the failover test, chaos mode and NetBox import on a live host.
 
 ## Planned
 - **Live collaboration:** several people editing one lab with cursors.
@@ -31,6 +28,7 @@
 - Per-hop Simulation stepping (hold packets at each device like Packet Tracer).
 
 ## Done
+- 0.17.0: shared labs (edit/view), hand-outs with a class view, public showcase links, time machine, chaos mode, Wireshark capture download and live streaming.
 - 0.16.1–0.16.3: self-test with progress, diagnostics and ISP/Internet coverage; FRR runs in sandboxed labs (capshim; verified on the public server, 33/33); OSPF passive interfaces in FRR 10 form.
 - 0.16.0: public demo sign-in with throwaway per-visitor sessions; brute-force protection with a security log, automatic and manual IP bans and an allowlist.
 - 0.15.0: ISP and Internet devices with static/DHCP/BGP customers, transit peering and hosted public services; path explainer; troubleshooting tickets; failover test; change rehearsal; continuous network tests; VoIP MOS; IOS and NetBox import; API tokens; containerlab YAML export; idle-lab auto-stop.

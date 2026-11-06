@@ -93,7 +93,7 @@ class Capture:
                 self.events.append({"id": self.next_id, "t": t, "link": link["id"],
                                     "from": link["a"] if fwd else link["b"],
                                     "to": link["b"] if fwd else link["a"],
-                                    "proto": proto, "info": info, "len": orig, "layers": layers})
+                                    "proto": proto, "info": info, "len": orig, "layers": layers, "raw": data})
                 self.next_id += 1
         except (asyncio.IncompleteReadError, asyncio.CancelledError):
             pass
@@ -109,13 +109,31 @@ class Capture:
         self.procs, self.tasks, self.running = [], [], False
 
     def list(self, after: int):
-        return [{k: v for k, v in e.items() if k != "layers"} for e in self.events if e["id"] > after]
+        return [{k: v for k, v in e.items() if k not in ("layers", "raw")} for e in self.events if e["id"] > after]
 
     def get(self, eid: int):
-        return next((e for e in self.events if e["id"] == eid), None)
+        e = next((e for e in self.events if e["id"] == eid), None)
+        return {k: v for k, v in e.items() if k != "raw"} if e else None
+
+    def pcap(self, link: str | None = None, ids: set[int] | None = None) -> bytes:
+        """The captured frames as a classic pcap file (Ethernet, microsecond timestamps) for Wireshark."""
+        return pcap_file((e["t"], e["raw"]) for e in self.events
+                         if e.get("raw") is not None and (not link or e["link"] == link) and (ids is None or e["id"] in ids))
 
     def clear(self):
         self.events.clear()
+
+
+def pcap_header(snaplen: int = 65535) -> bytes:
+    return struct.pack("<IHHiIII", 0xA1B2C3D4, 2, 4, 0, 0, snaplen, 1)       # LINKTYPE_ETHERNET
+
+
+def pcap_file(frames) -> bytes:
+    out = bytearray(pcap_header())
+    for t, data in frames:
+        sec = int(t)
+        out += struct.pack("<IIII", sec, int((t - sec) * 1e6), len(data), len(data)) + data
+    return bytes(out)
 
 
 CAPTURES: dict[str, Capture] = {}

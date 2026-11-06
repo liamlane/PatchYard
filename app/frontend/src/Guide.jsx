@@ -279,6 +279,28 @@ ping / traceroute / write memory / copy running-config tftp: / reload`}</Cmd>
       <p><b>Change rehearsal</b> (Dashboard): press <B>Take baseline</B> to record every router's routes, every OSPF/BGP/LDP neighbour and which hosts can reach which. Make your change, then <B>Compare with now</B>: you get exactly what it did: routes gained, lost or moved to a new next hop, neighbours that dropped, and host pairs that broke or got fixed. Practise a maintenance window before doing it for real.</p>
       <p><b>Network tests:</b> a challenge's checks can run on their own. In the challenge editor set <i>Network tests</i> to every 1, 5, 15 or 60 minutes. While the lab is deployed, a failing check raises the alert <i>Network test failed</i> (bell, email, phone, Teams, wherever your alerts go) and clears when it passes. Use it as "this must always be true" for your lab.</p>
     </> },
+  { id: "wireshark", group: "Running labs", title: "Wireshark captures", icon: "download", kw: "wireshark pcap capture tcpdump packet download live stream",
+    body: () => <>
+      <ul>
+        <li><b>From Simulation mode:</b> <B>Wireshark (.pcap)</B> in the Simulation panel downloads every captured packet as a pcap file.</li>
+        <li><b>From a cable:</b> click it, then <B>Capture to Wireshark</B>: pick which end and how long (10 s to 5 min) and the capture downloads when it finishes.</li>
+        <li><b>Live:</b> with an API token, the command under <i>Live in Wireshark</i> streams the cable straight into Wireshark on your computer until you stop it.</li>
+      </ul>
+    </> },
+  { id: "timemachine", group: "Running labs", title: "Time machine", icon: "restore", kw: "time machine history when what changed routes neighbours ports alert then rewind",
+    body: () => <>
+      <p>While a lab runs, Patchyard checks every router's routes and neighbours and every port every 30 seconds, and keeps a record each time something changes (for a day).</p>
+      <ul>
+        <li><b>Dashboard → Time machine:</b> each change point, with a summary ("2 routes lost; r2 OSPF 1.1.1.1 Full → Init; down: r1 eth2"). Click one to see exactly what changed then.</li>
+        <li><B>Compare with now</B> shows everything that's different between that moment and the network now.</li>
+        <li>On an alert, <B>network then</B> opens the time machine at the moment it fired.</li>
+      </ul>
+    </> },
+  { id: "chaos", group: "Running labs", title: "Chaos mode", icon: "zap", kw: "chaos random fault resilience score test redundancy break",
+    body: () => <>
+      <p><b>Dashboard → Chaos mode</b> breaks cables at random for as long as you choose: down, 40% loss or 300 ms of delay, each for 10–60 s, roughly every minute. Every 15 s every PC and server is pinged from every other one.</p>
+      <p>The <b>resilience score</b> is how often the hosts that could reach each other before the run still could: 100% means nobody noticed. Leave out cables you don't want touched, and press <B>Stop and repair</B> any time; everything is put back at the end.</p>
+    </> },
   { id: "sim", group: "Running labs", title: "Simulation mode", icon: "sim", kw: "simulation packet capture pdu step play event list osi layers",
     body: () => <>
       <p>Switch the toolbar from <B>Realtime</B> to <B>Simulation</B> to watch real packets hop by hop.</p>
@@ -380,6 +402,16 @@ end`}</Cmd></li>
       </Steps>
     </> },
 
+  { id: "sharing", group: "Labs", title: "Sharing, classes and public links", icon: "plus", kw: "share lab view edit read-only classroom class hand out copies teacher student instructor showcase public link",
+    body: () => <>
+      <p>Lab manager → <B>People & class</B>, with the lab open:</p>
+      <ul>
+        <li><b>Share with people:</b> give someone <i>can edit</i> (they change, deploy and run it like you) or <i>view only</i> (they see everything live, and can use Explain a path, but nothing is saved). Shared labs appear in their Labs list with who shared them. Only the owner can delete a lab or change who it's shared with.</li>
+        <li><b>Hand out copies:</b> list usernames and each person gets their own copy of the lab, challenge included, shared back to you read-only.</li>
+        <li><b>Class:</b> every handed-out copy with whether it's running, its challenge score and what's still failing. Open one to watch it live.</li>
+        <li><b>Public showcase link:</b> a link anyone can open without an account, showing the canvas, the devices and router configurations with passwords and keys hidden. Remove the link to stop it working.</li>
+      </ul>
+    </> },
   { id: "challenges", group: "Labs", title: "Challenges", icon: "flag", kw: "challenge activity exercise check score assessment points instructor student publish leaderboard vlan bgp nat acl",
     body: () => <>
       <p>A challenge is a lab with instructions and a <B>Check</B> button that scores what you've built, like a Packet Tracer activity. Checks look at the running network, so only what really works counts.</p>

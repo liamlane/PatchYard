@@ -117,6 +117,9 @@ A Services tab with a page per service, each with an On/Off switch and a running
 - **Failover test:** fail a cable on purpose and get the outage per flow and the routes that moved.
 - **Change rehearsal:** baseline the network, make a change, see exactly what it changed.
 - **Network tests:** a lab's checks run on a schedule and alert when they fail.
+- **Time machine:** every change to routes, neighbours and ports is recorded; see what the network looked like at any moment of the last day, or when an alert fired.
+- **Chaos mode:** random cable failures and impairments for as long as you like, with a resilience score.
+- **Wireshark:** download any capture as pcap, or stream a cable live into Wireshark.
 - **VoIP call quality:** MOS and R-factor for a simulated call across your network.
 
 ### Share a server
@@ -150,6 +153,7 @@ A Services tab with a page per service, each with an On/Off switch and a running
   - firewall edge with DMZ,
   - dual-ISP MPLS L3VPN.
 - **Labs:** snapshots with diff and restore, clone, and zip export and import.
+- **Share and teach:** share a lab with people (edit or view only), hand out a copy to each student and follow their scores in a class view, or publish a read-only showcase link anyone can open.
 - **Import real configs:** paste Cisco IOS running-configs (or point at NetBox, admins) and get a lab with the cabling worked out.
 - **Automation:** personal API tokens and a containerlab YAML for every lab.
 - **Access:** an admin login.

@@ -80,6 +80,7 @@ export default function LinkPanel({ lab, link, deployed, rate, hist, presets, on
       </section>
 
       <Failover lab={lab} link={link} deployed={deployed} down={down} notify={notify} />
+      <Wireshark lab={lab} link={link} deployed={deployed} notify={notify} />
 
       <section>
         <h4>Impairment <span className="hint">tc netem</span></h4>
@@ -143,6 +144,33 @@ function Failover({ lab, link, deployed, down, notify }) {
           </details>))}
         {!r.routes_on_failure.length && <p className="hint">No routing changes: traffic didn't depend on this cable, or the network has no alternative path.</p>}
       </>}
+    </section>
+  );
+}
+
+function Wireshark({ lab, link, deployed, notify }) {
+  const [secs, setSecs] = useState("60");
+  const [end, setEnd] = useState("a");
+  const url = api.linkPcapUrl(lab.name, link.id, secs, end);
+  const live = `curl -sN -H "Authorization: Bearer YOUR_TOKEN" "${location.origin}${api.linkPcapUrl(lab.name, link.id, 0, end)}" | wireshark -k -i -`;
+  return (
+    <section>
+      <h4>Capture to Wireshark</h4>
+      <p className="hint">Records this cable with tcpdump and downloads a .pcap you can open in Wireshark. Every packet, full size, from the moment you press it.</p>
+      <div className="row">
+        <select value={end} onChange={(e) => setEnd(e.target.value)} aria-label="Capture on">
+          <option value="a">on {link.a}'s port</option><option value="b">on {link.b}'s port</option></select>
+        <select value={secs} onChange={(e) => setSecs(e.target.value)} aria-label="For">
+          <option value="10">10 s</option><option value="30">30 s</option><option value="60">1 min</option><option value="300">5 min</option></select>
+        <a className={`btn ${deployed ? "" : "disabled"}`} href={deployed ? url : undefined} download
+          onClick={() => deployed && notify(`Capturing for ${Number(secs) >= 60 ? `${Number(secs) / 60} min` : `${secs} s`}`, "The download finishes when the capture does.", "info")}>
+          <Icon name="download" size={14} /> Capture</a>
+      </div>
+      <details><summary className="hint">Live in Wireshark</summary>
+        <p className="hint">Make an API token (Settings → Account), then on a computer with Wireshark run this. Packets appear as they cross the cable; stop it with Ctrl+C (an hour at most).</p>
+        <pre className="eq small">{live}</pre>
+        <button className="link" onClick={() => navigator.clipboard?.writeText(live).then(() => notify("Copied", null, "ok"))}>Copy command</button>
+      </details>
     </section>
   );
 }

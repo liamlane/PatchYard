@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from .env import env
 from fastapi import BackgroundTasks, FastAPI, HTTPException, WebSocket, Request
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from . import labs, devices, metrics, monitor, impair, labmgmt, templates, settings, alerts, live, traffic, auth, hardware, reach, cfgstate, l3, system, users, sandbox, proxy
 from . import mailer, audit, challenges, notify, channels, watch, security
@@ -61,6 +61,8 @@ async def lifespan(_app):
         tasks.append(asyncio.create_task(watch.tests_loop()))
         tasks.append(asyncio.create_task(watch.idle_loop(_idle_stop)))
         tasks.append(asyncio.create_task(watch.demo_loop(_end_demo)))
+        from . import history
+        tasks.append(asyncio.create_task(history.loop()))
         security.prune()
         await proxy.start()
         fw = await sandbox.refresh_firewall()
@@ -116,11 +118,22 @@ def node_of(lab: dict, nid: str) -> dict:
 
 # ---------------- labs ----------------
 def _visible(items):
+    """Labs the caller can see, each with 'access': owner, edit or view (labs shared with them)."""
     me = auth.current()
     fa = auth.first_admin()
+    out = []
     for i in items:
         i["owner"] = i.get("owner") or fa
-    return items if me["role"] == "admin" else [i for i in items if i["owner"] == me["name"]]
+        if me["role"] == "admin" or i["owner"] == me["name"]:
+            i["access"] = "owner"
+        elif (i.get("shares") or {}).get(me["name"]) in ("edit", "view"):
+            i["access"] = i["shares"][me["name"]]
+        else:
+            continue
+        if me["role"] != "admin" and i["access"] != "owner":
+            i.pop("shares", None)                 # who else it's shared with is the owner's business
+        out.append(i)
+    return out
 
 
 def my_labs() -> set | None:
@@ -134,7 +147,8 @@ def quota_new_lab(owner: str | None = None):
     owner = owner or auth.current()["name"]
     q = users.quota(owner)
     if q["max_labs"]:
-        mine = sum(1 for i in _visible(labs.list_labs()) if i["owner"] == owner)
+        fa = auth.first_admin()
+        mine = sum(1 for i in labs.list_labs() if (i.get("owner") or fa) == owner)
         if mine >= q["max_labs"]:
             raise HTTPException(403, f"you have {mine} labs, the limit is {q['max_labs']}: delete one first")
 
@@ -221,7 +235,7 @@ async def api_put(lab: str, body: dict):
         raise HTTPException(400, "lab name mismatch")
     old = labs.load(lab)
     for k in ("workdir", "imported_from", "raw_kinds", "mgmt_network", "mgmt_subnet", "template", "cloned_from",
-              "owner", "trusted", "sandbox_subnet"):
+              "owner", "trusted", "sandbox_subnet", "shares", "handout_from", "showcase"):
         body.pop(k, None)
         if k in old:
             body[k] = old[k]
@@ -656,7 +670,8 @@ async def api_clone(lab: str, body: dict):
     await devices.save_configs(d)
     c = labmgmt.clone(d, check_name(body.get("name", "")))
     nd = labs.load(c["lab"]["name"])
-    nd.pop("sandbox_subnet", None)
+    for k in ("sandbox_subnet", "shares", "handout_from", "showcase"):
+        nd.pop(k, None)
     if not auth.is_admin():
         nd.pop("trusted", None)
     labs.save(nd)
@@ -1719,6 +1734,278 @@ async def api_import_netbox(body: dict):
     d = own_new(r["lab"]["name"])
     audit.record("lab.create", d["name"], f"NetBox import ({r['devices']} devices)")
     return {**r, "lab": d}
+
+
+# ---------------- sharing, classroom, showcase links ----------------
+@app.get("/api/labs/{lab}/shares")
+async def api_shares(lab: str):
+    d = labs.load(lab)
+    return {"owner": d.get("owner") or auth.first_admin(), "shares": d.get("shares") or {},
+            "you": auth.access_level(lab), "handout_from": d.get("handout_from") or ""}
+
+
+@app.put("/api/labs/{lab}/shares")
+async def api_shares_set(lab: str, body: dict):
+    """{"shares": {"username": "edit" | "view"}}: replaces the list. Only the owner (or an admin)."""
+    d = labs.load(lab)
+    owner = d.get("owner") or auth.first_admin()
+    want = body.get("shares") or {}
+    if not isinstance(want, dict) or len(want) > 100:
+        raise HTTPException(400, "shares: up to 100 people")
+    clean = {}
+    for name, lvl in want.items():
+        name = str(name).strip().lower()
+        u = users.get(name)
+        if not u or u.get("demo"):
+            raise HTTPException(400, f"there's no user called {name}")
+        if name == owner:
+            continue
+        if lvl not in ("edit", "view"):
+            raise HTTPException(400, "each share is edit or view")
+        clean[name] = lvl
+    d["shares"] = clean
+    labs.save(d)
+    audit.record("lab.share", lab, ", ".join(f"{k}:{v}" for k, v in clean.items()) or "not shared")
+    return {"ok": True, "shares": clean}
+
+
+@app.get("/api/users/names")
+async def api_user_names(q: str = ""):
+    """Usernames to share with (autocomplete): signed-in users only, never demo accounts."""
+    me = auth.current()
+    if me.get("demo"):
+        raise HTTPException(403, "not in the demo")
+    q = q.strip().lower()
+    names = [n for n, u in users.all_users().items() if not u.get("demo") and not u.get("disabled") and n != me["name"] and q in n]
+    return sorted(names)[:20] if len(q) >= 1 else []
+
+
+@app.post("/api/labs/{lab}/handout")
+async def api_handout(lab: str, body: dict):
+    """Give each listed user their own copy of this lab (configs, challenge and all), shared back
+    to you read-only so you can watch progress in the Class view."""
+    me = auth.current()["name"]
+    d = labs.load(lab)
+    await devices.save_configs(d)
+    made, errors = [], []
+    for name in [str(x).strip().lower() for x in (body.get("users") or [])][:100]:
+        u = users.get(name)
+        if not u or u.get("demo"):
+            errors.append(f"{name}: no such user"); continue
+        new = f"{name}-{lab}"[:31].rstrip("-")
+        try:
+            check_name(new)
+            if (labs.lab_dir(new) / "lab.json").exists():
+                errors.append(f"{name}: {new} already exists"); continue
+            quota_new_lab(name)
+            c = labmgmt.clone(d, new)
+            nd = labs.load(c["lab"]["name"])
+            for k in ("sandbox_subnet", "trusted", "showcase"):
+                nd.pop(k, None)
+            nd["owner"], nd["shares"], nd["handout_from"] = name, {me: "view"}, lab
+            if nd.get("challenge"):
+                nd["challenge"].pop("started", None)
+            labs.save(nd)
+            made.append({"user": name, "lab": new})
+        except HTTPException as e:
+            errors.append(f"{name}: {e.detail}")
+        except (ValueError, FileExistsError) as e:
+            errors.append(f"{name}: {e}")
+    audit.record("lab.handout", lab, f"{len(made)} copies" + (f", {len(errors)} failed" if errors else ""))
+    if made and mailer.enabled():
+        for m in made:
+            em = (users.get(m["user"]) or {}).get("email")
+            if em:
+                t, h = mailer.render(f"{me} gave you a lab", [f"{me} handed out {lab}: your own copy is {m['lab']}, in your Lab manager.",
+                                     "It's yours to change; they can see it, but not change it."],
+                                     ("Open Patchyard", mailer.site_url()) if mailer.site_url() else None, notify._foot())
+                mailer.send_bg(em, f"Patchyard: {me} gave you {m['lab']}", t, h)
+    return {"made": made, "errors": errors}
+
+
+@app.get("/api/labs/{lab}/class")
+async def api_class(lab: str):
+    """Every copy handed out from this lab that you can see: who, running or not, challenge score."""
+    from . import netinfo
+    ctrs = await netinfo.containers()
+    running = {l for (l, _n), c in ctrs.items() if c["state"] == "running"}
+    out = []
+    for i in _visible(labs.list_labs()):
+        if i.get("handout_from") != lab:
+            continue
+        d = labs.load(i["name"])
+        r = challenges.last_result(d) or {}
+        out.append({"lab": i["name"], "owner": i["owner"], "running": i["name"] in running, "nodes": i["nodes"],
+                    "score": r.get("pct"), "best": r.get("best"), "checked": r.get("ts"), "completed": r.get("completed"),
+                    "passed": sum(1 for x in r.get("results", []) if x.get("ok")) if r else None, "total": len(r.get("results", [])) if r else None,
+                    "failing": [x["label"] for x in r.get("results", []) if not x.get("ok")][:5]})
+    return sorted(out, key=lambda x: x["owner"])
+
+
+_SECRET = re.compile(r"(?i)^(\s*\S.*?\b(password|secret|key|community|psk|token|md5)\b\s*)(.*)$")
+
+
+def _scrub(text: str) -> str:
+    """Hide passwords, keys and SNMP communities in a config before it's shown publicly."""
+    out = []
+    for ln in text.splitlines():
+        m = _SECRET.match(ln)
+        out.append(f"{m.group(1)}<hidden>" if m and m.group(3).strip() else ln)
+    return "\n".join(out)
+
+
+def _showcase_view(d: dict) -> dict:
+    keep = ("chassis", "modules", "sfp", "hostname", "engine", "ip_mode", "ip", "gateway", "asn", "pool")
+    nodes = [{"id": n["id"], "type": n["type"], "x": n.get("x", 0), "y": n.get("y", 0),
+              "props": {k: v for k, v in (n.get("props") or {}).items() if k in keep}} for n in d.get("nodes", [])]
+    links = [{k: v for k, v in l.items() if k in ("id", "a", "a_if", "b", "b_if", "media")} for l in d.get("links", [])]
+    configs = {}
+    wd = labs.workdir(d)
+    for n in d.get("nodes", []):
+        f = wd / "configs" / n["id"] / "frr.conf"
+        if n["type"] in ("router", "isp", "internet") and f.is_file():
+            configs[n["id"]] = _scrub(f.read_text()[:60000])
+    ch = d.get("challenge") or {}
+    return {"name": d["name"], "nodes": nodes, "links": links, "annotations": d.get("annotations") or [],
+            "configs": configs, "owner": d.get("owner") or "", "challenge": {"title": ch.get("title"), "instructions": ch.get("instructions")} if ch else None,
+            "created": (d.get("showcase") or {}).get("created")}
+
+
+@app.post("/api/labs/{lab}/showcase")
+async def api_showcase_make(lab: str):
+    if not settings.get("users.allow_showcase", True) and not auth.is_admin():
+        raise HTTPException(403, "public links are turned off on this server")
+    d = labs.load(lab)
+    sc = d.get("showcase") or {}
+    if not sc.get("token"):
+        sc = {"token": secrets.token_urlsafe(16), "created": time.time(), "by": auth.current()["name"]}
+        d["showcase"] = sc
+        labs.save(d)
+        audit.record("lab.showcase", lab, "public link made")
+    return {"token": sc["token"], "url": f"/s/{sc['token']}"}
+
+
+@app.delete("/api/labs/{lab}/showcase")
+async def api_showcase_drop(lab: str):
+    d = labs.load(lab)
+    if d.pop("showcase", None):
+        labs.save(d)
+        audit.record("lab.showcase", lab, "public link removed")
+    return {"ok": True}
+
+
+@app.get("/api/showcase/{token}")
+async def api_showcase(token: str, request: Request):
+    """Public, no sign-in: a read-only view of a lab whose owner made a showcase link."""
+    if len(token) < 16:
+        raise HTTPException(404, "no such link")
+    for i in labs.list_labs():
+        if not i.get("showcase"):
+            continue
+        d = labs.load(i["name"])
+        if hmac.compare_digest(str((d.get("showcase") or {}).get("token") or ""), token):
+            return _showcase_view(d)
+    security.event("showcase.invalid", _client_ip(request), "", "unknown showcase link")
+    raise HTTPException(404, "this link doesn't exist (any more)")
+
+
+# ---------------- packet capture to Wireshark ----------------
+@app.get("/api/labs/{lab}/sim/capture.pcap")
+async def api_sim_pcap(lab: str, link: str = ""):
+    data = capture_for(lab).pcap(link or None)
+    return Response(data, media_type="application/vnd.tcpdump.pcap",
+                    headers={"Content-Disposition": f'attachment; filename="{lab}{"-" + link if link else ""}.pcap"'})
+
+
+@app.get("/api/labs/{lab}/links/{link_id}/pcap")
+async def api_link_pcap(lab: str, link_id: str, seconds: int = 60, end: str = "a"):
+    """Capture one cable live and stream it as pcap: save it, or pipe it into Wireshark
+    (curl -N -H "Authorization: Bearer pyt_…" URL | wireshark -k -i -). seconds=0 runs until you stop it (1 h at most)."""
+    from .util import container_pid
+    d = labs.load(lab)
+    l = next((x for x in d["links"] if x["id"] == link_id), None)
+    if not l:
+        raise HTTPException(404, "no such cable")
+    node, ifn = (l["a"], l["a_if"]) if end != "b" else (l["b"], l["b_if"])
+    pid = await container_pid(lab, node)
+    if not pid:
+        node, ifn = (l["b"], l["b_if"]) if end != "b" else (l["a"], l["a_if"])
+        pid = await container_pid(lab, node)
+    if not pid:
+        raise HTTPException(409, "neither end of this cable is running")
+    secs = 3600 if seconds <= 0 else max(1, min(3600, int(seconds)))
+    proc = await asyncio.create_subprocess_exec("timeout", str(secs), "nsenter", "-t", str(pid), "-n", "tcpdump", "-i", ifn, "-U", "-n",
+                                                "-s", "1600", "-w", "-", stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+    audit.record("capture.stream", lab, f"{node} {ifn} for {secs}s")
+
+    async def body():
+        try:
+            while True:
+                chunk = await proc.stdout.read(65536)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            if proc.returncode is None:
+                proc.kill()
+            await proc.wait()
+    return StreamingResponse(body(), media_type="application/vnd.tcpdump.pcap",
+                             headers={"Content-Disposition": f'attachment; filename="{lab}-{node}-{ifn}.pcap"', "Cache-Control": "no-store"})
+
+
+# ---------------- time machine, chaos ----------------
+@app.get("/api/labs/{lab}/history")
+async def api_history_tl(lab: str):
+    from . import history
+    return history.timeline(labs.load(lab))
+
+
+@app.get("/api/labs/{lab}/history/{i}")
+async def api_history_point(lab: str, i: int):
+    from . import history
+    return history.point(labs.load(lab), i)
+
+
+@app.get("/api/labs/{lab}/history-at")
+async def api_history_at(lab: str, ts: float):
+    from . import history
+    return {"i": history.at(labs.load(lab), ts)}
+
+
+@app.post("/api/labs/{lab}/history/{i}/compare")
+async def api_history_compare(lab: str, i: int):
+    from . import history
+    return await history.compare_now(labs.load(lab), i)
+
+
+@app.post("/api/labs/{lab}/history/record")
+async def api_history_record(lab: str):
+    from . import history
+    return {"changed": await history.record(labs.load(lab))}
+
+
+@app.get("/api/labs/{lab}/chaos")
+async def api_chaos(lab: str):
+    from . import chaos
+    return chaos.get(lab) or {}
+
+
+@app.post("/api/labs/{lab}/chaos")
+async def api_chaos_start(lab: str, body: dict):
+    from . import chaos
+    d = labs.load(lab)
+    if not await container_states(lab):
+        raise HTTPException(409, "deploy the lab first")
+    j = chaos.start(d, float(body.get("minutes") or 10), float(body.get("every") or 60),
+                    list(body.get("kinds") or ["down"]), [str(x) for x in body.get("exclude") or []])
+    audit.record("lab.chaos", lab, f"{body.get('minutes') or 10} min, every {body.get('every') or 60}s: {', '.join(j['kinds'])}")
+    return j
+
+
+@app.post("/api/labs/{lab}/chaos/stop")
+async def api_chaos_stop(lab: str):
+    from . import chaos
+    return chaos.stop(lab) or {}
 
 
 # ---------------- API tokens ----------------

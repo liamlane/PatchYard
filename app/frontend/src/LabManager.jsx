@@ -193,10 +193,13 @@ function Labs({ lab, notify, onOpenLab, refreshLabs, close }) {
       <thead><tr><th>Lab</th><th>Devices</th><th>Cables</th><th>State</th><th /></tr></thead>
       <tbody>{list.map((l) => (
         <tr key={l.name} className={lab?.name === l.name ? "cur" : ""}>
-          <td><button className="link" onClick={() => { close(); onOpenLab(l.name); }}>{l.name}</button>{lab?.name === l.name && <span className="hint"> (open)</span>}</td>
+          <td><button className="link" onClick={() => { close(); onOpenLab(l.name); }}>{l.name}</button>{lab?.name === l.name && <span className="hint"> (open)</span>}
+            {l.access && l.access !== "owner" && <span className={`schip ${l.access === "edit" ? "s-ok" : "s-warn"}`} title={`shared with you by ${l.owner}`}> {l.access === "edit" ? "can edit" : "view only"} · {l.owner}</span>}
+            {l.access === "owner" && Object.keys(l.shares || {}).length > 0 && <span className="hint" title={Object.entries(l.shares).map(([u, v]) => `${u}: ${v}`).join(", ")}> · shared with {Object.keys(l.shares).length}</span>}
+            {l.showcase && <span className="hint"> · public link</span>}</td>
           <td>{l.nodes}</td><td>{l.links}</td>
           <td>{l.running ? <span className="schip s-ok">{l.running} running</span> : <span className="hint">not deployed</span>}</td>
-          <td><button className="link danger" disabled={busy === l.name} onClick={() => del(l)}>{busy === l.name ? "Working…" : l.running ? "Destroy & delete" : "Delete"}</button></td>
+          <td>{(!l.access || l.access === "owner") && <button className="link danger" disabled={busy === l.name} onClick={() => del(l)}>{busy === l.name ? "Working…" : l.running ? "Destroy & delete" : "Delete"}</button>}</td>
         </tr>))}
         {!list.length && <tr><td colSpan={5} className="empty">No labs yet.</td></tr>}
       </tbody>
@@ -206,7 +209,7 @@ function Labs({ lab, notify, onOpenLab, refreshLabs, close }) {
 
 export default function LabManager({ lab, deployed, initial = "templates", notify, onOpenLab, onStartChallenge, onClose, refreshLabs, onReload, onRedeploy }) {
   const [tab, setTab] = useState(!lab && initial === "snapshots" ? "templates" : initial);
-  const tabs = [["labs", "Labs", "grid"], ["templates", "Templates", "layers"], ["challenges", "Challenges", "flag"], ...(lab ? [["snapshots", "Snapshots", "camera"]] : []), ["share", "Clone · export · import", "copy"]];
+  const tabs = [["labs", "Labs", "grid"], ["templates", "Templates", "layers"], ["challenges", "Challenges", "flag"], ...(lab ? [["snapshots", "Snapshots", "camera"], ["people", "People & class", "plus"]] : []), ["share", "Clone · export · import", "copy"]];
   return (
     <Modal title="Lab manager" onClose={onClose} wide>
       <div className="seg mgr-tabs">{tabs.map(([k, l, i]) => <button key={k} className={tab === k ? "on" : ""} onClick={() => setTab(k)}><Icon name={i} size={15} /> {l}</button>)}</div>
@@ -214,6 +217,7 @@ export default function LabManager({ lab, deployed, initial = "templates", notif
       {tab === "templates" && <Templates notify={notify} onOpenLab={onOpenLab} close={onClose} />}
       {tab === "challenges" && <ChallengeList notify={notify} onStart={onStartChallenge || onOpenLab} close={onClose} />}
       {tab === "snapshots" && lab && <Snapshots lab={lab} deployed={deployed} notify={notify} onReload={onReload} onRedeploy={onRedeploy} />}
+      {tab === "people" && lab && <People lab={lab} notify={notify} onOpenLab={onOpenLab} close={onClose} refreshLabs={refreshLabs} />}
       {tab === "share" && <Share lab={lab} notify={notify} onOpenLab={onOpenLab} close={onClose} refreshLabs={refreshLabs} />}
     </Modal>
   );
@@ -285,5 +289,83 @@ function NetboxImport({ notify, onOpenLab, close, refreshLabs }) {
       <ImportReport r={r} />
       {r && <button onClick={() => { close(); onOpenLab(r.lab.name); }}>Open {r.lab.name}</button>}
     </section>
+  );
+}
+
+function People({ lab, notify, onOpenLab, close, refreshLabs }) {
+  const [info, setInfo] = useState(null);
+  const [who, setWho] = useState({ name: "", level: "view" });
+  const [names, setNames] = useState([]);
+  const [hand, setHand] = useState("");
+  const [busy, setBusy] = useState("");
+  const [res, setRes] = useState(null);
+  const [cls, setCls] = useState(null);
+  const [link, setLink] = useState(null);
+  const load = () => {
+    api.shares(lab.name).then(setInfo).catch((e) => notify(e.message, null, "bad"));
+    api.klass(lab.name).then(setCls).catch(() => setCls([]));
+  };
+  useEffect(() => { load(); }, [lab.name]); // eslint-disable-line
+  useEffect(() => { if (who.name.length >= 1) { const t = setTimeout(() => api.userNames(who.name).then(setNames).catch(() => {}), 200); return () => clearTimeout(t); } return undefined; }, [who.name]);
+  if (!info) return <p className="hint">Loading…</p>;
+  const owner = info.you === "owner";
+  const save = async (shares) => {
+    try { const r = await api.sharesSet(lab.name, shares); setInfo({ ...info, shares: r.shares }); refreshLabs?.(); } catch (e) { notify(e.message, null, "bad"); }
+  };
+  const origin = location.origin;
+  return (
+    <div className="share people">
+      {!owner && <p className="hint">{info.owner} owns this lab and shared it with you ({info.you === "edit" ? "you can change it" : "read-only"}). Only they can change who it's shared with.</p>}
+      {owner && <section><h3><Icon name="plus" size={16} /> Share with people</h3>
+        <p className="hint"><b>Can edit</b>: they can change, deploy and run it like you. <b>View only</b>: they see the canvas, configs, dashboard and live state, and can use Explain a path, but nothing they do is saved. Only you can delete it or change this list.</p>
+        <table className="grid compact"><tbody>
+          {Object.entries(info.shares).map(([u, lvl]) => <tr key={u}><td><b>{u}</b></td>
+            <td><select value={lvl} onChange={(e) => save({ ...info.shares, [u]: e.target.value })}><option value="view">view only</option><option value="edit">can edit</option></select></td>
+            <td><button className="link danger" onClick={() => { const x = { ...info.shares }; delete x[u]; save(x); }}>Remove</button></td></tr>)}
+          {!Object.keys(info.shares).length && <tr><td className="hint">Only you (and admins) can see this lab.</td></tr>}
+        </tbody></table>
+        <div className="row">
+          <input list="share-names" placeholder="username" value={who.name} onChange={(e) => setWho({ ...who, name: e.target.value.trim().toLowerCase() })} aria-label="Share with" />
+          <datalist id="share-names">{names.map((n) => <option key={n} value={n} />)}</datalist>
+          <select value={who.level} onChange={(e) => setWho({ ...who, level: e.target.value })} aria-label="Access"><option value="view">view only</option><option value="edit">can edit</option></select>
+          <button disabled={!who.name} onClick={() => { save({ ...info.shares, [who.name]: who.level }); setWho({ name: "", level: "view" }); }}>Share</button>
+        </div>
+      </section>}
+
+      {owner && <section><h3><Icon name="copy" size={16} /> Hand out copies (classroom)</h3>
+        <p className="hint">Each person gets their own copy of this lab as it is now (design, saved configs and challenge), named <code>their-name-{lab.name}</code>. It's theirs to change; it's shared back to you read-only, so you can follow everyone below. Save running configs first if you've changed the running lab.</p>
+        <textarea rows={3} className="mono" placeholder={"usernames, one per line or separated by commas"} value={hand} onChange={(e) => setHand(e.target.value)} />
+        <div className="row"><button className="primary" disabled={!hand.trim() || busy === "hand"} onClick={async () => {
+          setBusy("hand");
+          try { const r = await api.handout(lab.name, hand.split(/[\s,;]+/).filter(Boolean)); setRes(r); setHand(""); load(); refreshLabs?.();
+            notify(`Handed out ${r.made.length} cop${r.made.length === 1 ? "y" : "ies"}`, r.errors.join("\n") || null, r.errors.length ? "warn" : "ok"); }
+          catch (e) { notify(e.message, null, "bad"); }
+          setBusy("");
+        }}>{busy === "hand" ? "Copying…" : "Hand out"}</button></div>
+        {res?.errors?.length > 0 && <ul className="small error">{res.errors.map((e) => <li key={e}>{e}</li>)}</ul>}
+      </section>}
+
+      {cls?.length > 0 && <section><h3><Icon name="grid" size={16} /> Class <span className="hint">{cls.length} cop{cls.length === 1 ? "y" : "ies"} · {cls.filter((c) => c.completed).length} finished</span></h3>
+        <table className="grid compact"><thead><tr><th>Student</th><th>Lab</th><th>Running</th><th>Score</th><th>Still failing</th><th>Last check</th></tr></thead>
+          <tbody>{cls.map((c) => <tr key={c.lab}><td><b>{c.owner}</b></td>
+            <td><button className="link" onClick={() => { close(); onOpenLab(c.lab); }}>{c.lab}</button></td>
+            <td>{c.running ? <span className="schip s-ok">running</span> : <span className="hint">no</span>}</td>
+            <td>{c.score == null ? <span className="hint">not checked</span> : <span className={`schip ${c.score === 100 ? "s-ok" : c.score >= 50 ? "s-warn" : "s-bad"}`}>{c.score}%</span>}{c.best != null && c.best !== c.score && <span className="hint"> best {c.best}%</span>}</td>
+            <td className="small">{(c.failing || []).join("; ")}</td>
+            <td className="hint">{c.checked ? new Date(c.checked * 1000).toLocaleString() : "–"}</td></tr>)}</tbody></table>
+        <div className="row"><button onClick={load}>Refresh</button><span className="hint">Open a copy to watch it live (read-only). Scores update when the student presses Check.</span></div>
+      </section>}
+
+      {owner && <section><h3><Icon name="link" size={16} /> Public showcase link</h3>
+        <p className="hint">A link anyone can open without an account: the canvas, each device, and router configurations with passwords and keys hidden. Nothing can be changed or run. Remove the link to stop it working.</p>
+        <div className="row">
+          <button onClick={async () => { try { const r = await api.showcaseMake(lab.name); setLink(origin + r.url); refreshLabs?.(); } catch (e) { notify(e.message, null, "bad"); } }}>{link ? "Show link" : "Make / show link"}</button>
+          {link && <><input className="grow mono" readOnly value={link} onFocus={(e) => e.target.select()} aria-label="Public link" />
+            <button onClick={() => navigator.clipboard?.writeText(link).then(() => notify("Link copied", null, "ok"))}>Copy</button>
+            <a className="btn" href={link} target="_blank" rel="noreferrer">Open</a>
+            <button className="link danger" onClick={async () => { await api.showcaseDrop(lab.name).catch(() => {}); setLink(null); refreshLabs?.(); notify("Public link removed", null, "ok"); }}>Remove link</button></>}
+        </div>
+      </section>}
+    </div>
   );
 }

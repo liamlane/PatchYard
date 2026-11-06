@@ -21,7 +21,7 @@ from .env import env
 
 COOKIE = "patchyard_session"
 SECRET_FILE = settings.FILE.parent / "secret.key"
-OPEN = ("/api/auth/", "/api/version", "/api/invite/")
+OPEN = ("/api/auth/", "/api/version", "/api/invite/", "/api/showcase/", "/api/hardware")
 # what a demo session can't do: change the account, make tokens, import from outside, publish
 DEMO_DENY = (("*", "/api/auth/password"), ("*", "/api/auth/profile"), ("*", "/api/auth/2fa/"), ("*", "/api/auth/tokens"),
              ("*", "/api/auth/ntfy"), ("*", "/api/auth/alert-email"), ("*", "/api/import/"), ("POST", "/api/labs/import"),
@@ -174,11 +174,11 @@ def failed(*keys):
 
 
 # ------------------------------------------------------------------ lab ownership
-_OWN: dict[str, tuple[float, str]] = {}
+_OWN: dict[str, tuple[float, str, dict]] = {}
 
 
-def lab_owner(lab: str) -> str | None:
-    """Owner of a lab ('admin' for labs from before multi-user); None if it doesn't exist."""
+def _lab_meta(lab: str) -> tuple[str, dict] | None:
+    """(owner, shares) of a lab, cached on lab.json's mtime; None if it doesn't exist."""
     f = settings.DATA / lab / "lab.json"
     try:
         mt = f.stat().st_mtime
@@ -186,13 +186,36 @@ def lab_owner(lab: str) -> str | None:
         return None
     hit = _OWN.get(lab)
     if hit and hit[0] == mt:
-        return hit[1]
+        return hit[1], hit[2]
     try:
-        owner = json.loads(f.read_text()).get("owner") or first_admin()
+        d = json.loads(f.read_text())
+        owner, shares = d.get("owner") or first_admin(), dict(d.get("shares") or {})
     except (OSError, ValueError):
-        owner = first_admin()
-    _OWN[lab] = (mt, owner)
-    return owner
+        owner, shares = first_admin(), {}
+    _OWN[lab] = (mt, owner, shares)
+    return owner, shares
+
+
+def lab_owner(lab: str) -> str | None:
+    """Owner of a lab ('admin' for labs from before multi-user); None if it doesn't exist."""
+    m = _lab_meta(lab)
+    return m[0] if m else None
+
+
+def access_level(lab: str, who: dict | None = None) -> str | None:
+    """'owner', 'edit' or 'view' for this user on this lab (admins: 'owner'); None = no access.
+    A lab that doesn't exist yet counts as 'owner' so creating it works (the route itself 404s otherwise)."""
+    who = who or current()
+    if who["role"] == "admin":
+        return "owner"
+    m = _lab_meta(lab)
+    if m is None:
+        return "owner"
+    owner, shares = m
+    if owner == who["name"]:
+        return "owner"
+    lvl = shares.get(who["name"])
+    return lvl if lvl in ("edit", "view") else None
 
 
 def first_admin() -> str:
@@ -201,11 +224,11 @@ def first_admin() -> str:
 
 
 def can_access(lab: str, who: dict | None = None) -> bool:
-    who = who or current()
-    if who["role"] == "admin":
-        return True
-    o = lab_owner(lab)
-    return o is None or o == who["name"]          # None: doesn't exist yet -> the route gives 404/creates
+    return access_level(lab, who) is not None
+
+
+# what someone with view-only access may still do: read anything, and these read-only POSTs
+VIEW_POSTS = re.compile(r"^/api/labs/[^/]+/(explain|reachability|baseline/compare)$")
 
 
 # ------------------------------------------------------------------ middleware
@@ -285,6 +308,8 @@ class AuthMiddleware:
                 return await self._deny(scope, send, 403, "2fa-setup-required: set up two-factor sign-in first")
             if who and who.get("demo"):
                 DEMO_SEEN[who["name"]] = time.time()
+                if method != "GET" and re.match(r"^/api/labs/[^/]+/(shares|handout|showcase)$", path):
+                    return await self._deny(scope, send, 403, "not in the demo: request an account to share labs")
                 for m, pre in DEMO_DENY:
                     if (m == "*" or m == method) and (path == pre or path.startswith(pre.rstrip("/") + "/") or (pre.endswith("/") and path.startswith(pre))):
                         return await self._deny(scope, send, 403, "not in the demo: request an account to use this")
@@ -293,8 +318,16 @@ class AuthMiddleware:
                     if (m == "*" or m == method) and (path == pre or (pre.endswith("/") and path.startswith(pre))):
                         return await self._deny(scope, send, 403, "admins only")
                 mm = LAB_PATH.match(path)
-                if mm and mm.group(1) not in NOT_LABS and not can_access(mm.group(1), who):
-                    return await self._deny(scope, send, 404, f"lab '{mm.group(1)}' not found")
+                if mm and mm.group(1) not in NOT_LABS:
+                    lvl = access_level(mm.group(1), who)
+                    if lvl is None:
+                        return await self._deny(scope, send, 404, f"lab '{mm.group(1)}' not found")
+                    if lvl == "view" and (path.startswith("/ws/") or (method not in ("GET", "HEAD") and not VIEW_POSTS.match(path))):
+                        return await self._deny(scope, send, 403, "you can look at this lab but not change it (shared read-only)")
+                    if lvl == "edit" and re.match(r"^/api/labs/[^/]+/(shares|handout|showcase)$", path) and method != "GET":
+                        return await self._deny(scope, send, 403, "only the lab's owner can change who it's shared with")
+                    if lvl == "edit" and method == "DELETE" and re.match(r"^/api/labs/[^/]+$", path):
+                        return await self._deny(scope, send, 403, "only the lab's owner can delete it")
             mm0 = LAB_PATH.match(path) if who else None
             if mm0 and mm0.group(1) not in NOT_LABS and lab_owner(mm0.group(1)) is not None:
                 from . import watch            # idle stop: the lab is in use (only real labs, only after access is checked)

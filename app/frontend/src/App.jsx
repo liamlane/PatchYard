@@ -14,6 +14,7 @@ import { NotificationsPanel, TrafficPanel, Login, InvitePage, ResetPage } from "
 const Settings = lazy(() => import("./Settings.jsx"));
 const Admin = lazy(() => import("./Admin.jsx"));
 const Guide = lazy(() => import("./Guide.jsx"));
+const Showcase = lazy(() => import("./Showcase.jsx"));
 import { ChallengePanel } from "./Challenge.jsx";
 import { Require2FA } from "./TwoFactor.jsx";
 import { ExplainPanel, TicketPanel } from "./Explain.jsx";
@@ -185,8 +186,12 @@ function Workspace() {
   // ---------- history-aware edits ----------
   const clone = (x) => JSON.parse(JSON.stringify(x));
   const pushHistory = () => { if (!labRef.current) return; past.current.push(clone(labRef.current)); if (past.current.length > 100) past.current.shift(); future.current = []; setHv((v) => v + 1); };
-  const change = (fn) => { pushHistory(); setLab((l) => fn(l)); setDirty(true); };
-  const quiet = (fn) => { setLab((l) => fn(l)); setDirty(true); };
+  // a lab shared with you read-only: look, run the read-only tools, but nothing is saved
+  const labInfo = labs.find((l) => l.name === lab?.name);
+  const readOnly = labInfo?.access === "view";
+  const roNote = () => notify("This lab is shared with you read-only", `Clone it from the Lab manager to make your own copy${labInfo?.owner ? ` (${labInfo.owner} owns it)` : ""}.`, "warn");
+  const change = (fn) => { if (readOnly) return roNote(); pushHistory(); setLab((l) => fn(l)); setDirty(true); };
+  const quiet = (fn) => { if (readOnly) return roNote(); setLab((l) => fn(l)); setDirty(true); };
   const keepLive = (target) => {
     // live state (props pushed to containers, link impairments) is not part of undo
     const cur = labRef.current;
@@ -200,9 +205,10 @@ function Workspace() {
   // autosave
   useEffect(() => {
     if (!dirty || !lab) return;
+    if (readOnly) { setDirty(false); return; }
     const t = setTimeout(() => api.save(lab, revRef.current).then(() => setDirty(false)).catch((e) => notify(`Save failed: ${e.message}`, null, "bad")), 900);
     return () => clearTimeout(t);
-  }, [lab, dirty, notify]);
+  }, [lab, dirty, notify, readOnly]);
 
   // status + live metrics polling
   useEffect(() => {
@@ -688,6 +694,8 @@ function Workspace() {
   const devSel = selDevices().length;
   const sideOpen = sim ? "sim" : side;
 
+  const show = location.pathname.match(/^\/s\/([\w-]+)$/);
+  if (show) return <Suspense fallback={null}><Showcase token={show[1]} /></Suspense>;
   const invite = location.pathname.match(/^\/invite\/([\w-]+)$/);
   if (invite) return <InvitePage token={invite[1]} />;
   const reset = location.pathname.match(/^\/reset\/([\w-]+)$/);
@@ -759,6 +767,7 @@ function Workspace() {
           </div>)}
       </header>
       {me?.demo && <DemoBar me={me} demo={auth.demo} />}
+      {readOnly && !me?.demo && <div className="demo-bar ro-bar" role="status"><b>Read-only</b> · {labInfo.owner} shared this lab with you to look at · changes aren't saved · clone it to make your own copy</div>}
 
       <aside className="palette" aria-label="Devices and tools">
         <h3>Devices</h3>
@@ -787,7 +796,7 @@ function Workspace() {
         onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; }}
         onDrop={(e) => { e.preventDefault(); const t = e.dataTransfer.getData("application/netlab"); if (t) addNode(t, rf.screenToFlowPosition({ x: e.clientX - 38, y: e.clientY - 40 })); }}>
         {lab ? (
-          <ReactFlow nodes={rfNodes} edges={rfEdges} nodeTypes={nodeTypes} edgeTypes={edgeTypes}
+          <ReactFlow nodes={rfNodes} edges={rfEdges} nodeTypes={nodeTypes} edgeTypes={edgeTypes} nodesDraggable={!readOnly}
             onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} onNodeClick={onNodeClick}
             onNodeContextMenu={onNodeContextMenu} onEdgeContextMenu={onEdgeContextMenu} onPaneContextMenu={onPaneContextMenu}
             onPaneClick={() => { setPick(null); setPickIf(null); setMenu(null); setPortMenu(null); }} deleteKeyCode={["Delete", "Backspace"]} multiSelectionKeyCode={["Meta", "Control"]}
@@ -849,7 +858,13 @@ function Workspace() {
       )}
       {!sim && side === "alerts" && (
         <NotificationsPanel onClose={() => setSide(null)} notify={notify} onSettings={() => setSettingsTab("alerts")} refreshKey={alertSum?.last_event}
-          onGoto={async (labName, node) => { if (labName !== lab?.name) await openLab(labName); setTimeout(() => { focusNode(node); }, 400); }} />
+          onGoto={async (labName, node) => { if (labName !== lab?.name) await openLab(labName); setTimeout(() => { focusNode(node); }, 400); }}
+          onTimeMachine={async (labName, ts) => {
+            if (labName !== lab?.name) await openLab(labName);
+            setSide("dash");
+            setTimeout(() => { window.dispatchEvent(new CustomEvent("patchyard-timemachine", { detail: { lab: labName, ts: ts + 1 } }));
+              document.querySelector(".timemachine")?.scrollIntoView({ block: "start" }); }, 700);
+          }} />
       )}
       {!sim && side === "challenge" && lab && (
         <ChallengePanel key={lab.name} lab={lab} deployed={deployed} me={me} notify={notify} onClose={() => setSide(null)}

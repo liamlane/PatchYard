@@ -14,7 +14,7 @@ from . import labs, netinfo, monitor, reach
 FILE = "baseline.json"
 
 
-async def capture(lab: dict) -> dict:
+async def capture(lab: dict, with_reach: bool = True) -> dict:
     ctrs = await netinfo.containers()
     rts = [n["id"] for n in lab["nodes"] if n["type"] in ("router", "isp", "internet") and not n.get("raw")
            and (ctrs.get((lab["name"], n["id"])) or {}).get("state") == "running"]
@@ -33,8 +33,10 @@ async def capture(lab: dict) -> dict:
         for row in p["ldp"]["rows"]:
             n[f"LDP {row['id']}"] = row["state"]
         nbrs[r] = n
-    rc = await reach.check(lab)
-    reach_ok = {f"{s}→{d}": v is not None for s, row in rc["results"].items() for d, v in row.items()}
+    reach_ok = {}
+    if with_reach:
+        rc = await reach.check(lab)
+        reach_ok = {f"{s}→{d}": v is not None for s, row in rc["results"].items() for d, v in row.items()}
     return {"ts": time.time(), "routes": routes, "neighbours": nbrs, "reach": reach_ok,
             "summary": {"routers": len(routes), "routes": sum(len(v) for v in routes.values()),
                         "reachable": sum(reach_ok.values()), "pairs": len(reach_ok)}}

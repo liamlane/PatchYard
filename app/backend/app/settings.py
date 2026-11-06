@@ -28,6 +28,8 @@ DEFAULTS = {
                      "router_model": "router-3s", "switch_model": "switch-24"},
     "monitoring": {"interval": 10, "retention_hours": 48, "health_interval": 30},
     "snapshots": {"auto_before_deploy": True, "keep_auto": 20},
+    # time machine: routes, neighbours and port states of deployed labs, recorded when they change
+    "history": {"enabled": True, "interval_s": 30, "keep_hours": 24},
     "alerts": {"enabled": True, "grace_s": 120, "rules": DEFAULT_RULES},
     "notifications": {"toast_min_severity": "warning", "toast_resolved": True, "sound": False},
     # require_2fa: auto = admins on a public (sandboxed) server, otherwise off
@@ -38,7 +40,8 @@ DEFAULTS = {
     # multi-user: default limits for non-admin users (0 = unlimited) and images they may pick
     "users": {"quota": {"max_labs": 5, "max_running_labs": 1, "max_devices": 20, "device_memory_mb": 512, "device_cpus": 1.0,
                         "max_disk_mb": 2048},
-              "allowed_images": [], "allow_requests": True, "idle_stop_minutes": 0, "idle_stop_admins": False},
+              "allowed_images": [], "allow_requests": True, "idle_stop_minutes": 0, "idle_stop_admins": False,
+              "allow_showcase": True},
     # demo sign-in: anyone who signs in with the demo login gets a throwaway account of their own
     # (labs and all), deleted when they sign out, go idle, or the session time runs out
     "demo": {"enabled": False, "username": "demo", "password": "demo", "max_sessions": 5, "session_minutes": 60, "idle_minutes": 20,
@@ -166,6 +169,11 @@ def validate(s: dict) -> dict:
     s["users"]["allow_requests"] = bool(s["users"].get("allow_requests", True))
     s["users"]["idle_stop_minutes"] = int(max(0, min(10080, int(float(s["users"].get("idle_stop_minutes") or 0)))))
     s["users"]["idle_stop_admins"] = bool(s["users"].get("idle_stop_admins"))
+    h = s["history"]
+    h["enabled"] = bool(h.get("enabled", True))
+    h["interval_s"] = int(max(10, min(600, int(float(h.get("interval_s") or 30)))))
+    h["keep_hours"] = int(max(1, min(168, int(float(h.get("keep_hours") or 24)))))
+    s["users"]["allow_showcase"] = bool(s["users"].get("allow_showcase", True))
     sec = s["security"]
     sec["ban_enabled"] = bool(sec.get("ban_enabled", True))
     sec["ban_email"] = bool(sec.get("ban_email", True))

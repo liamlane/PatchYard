@@ -50,6 +50,8 @@ export default function Dashboard({ lab, states, live, linkHist, log, onFocusNod
 
       <Reachability lab={lab} running={running} onFocusNode={onFocusNode} />
       <Baseline lab={lab} running={running} />
+      <TimeMachine lab={lab} running={running} />
+      <Chaos lab={lab} running={running} />
 
       {routers.length > 0 && (
         <section className="dash-sec">
@@ -171,7 +173,13 @@ function Baseline({ lab, running }) {
       </div>
       {err && <p className="error">{err}</p>}
       {nothing && <p className="ok-t">✓ No difference: same routes, same neighbours, same reachability.</p>}
-      {d && !nothing && <>
+      {d && !nothing && <DiffView d={d} />}
+    </section>
+  );
+}
+
+function DiffView({ d }) {
+  return (<>
         {(d.broken.length > 0 || d.fixed.length > 0) && <div className="row wrap">
           {d.broken.map((p) => <span key={p} className="schip s-bad">✗ {p}</span>)}
           {d.fixed.map((p) => <span key={p} className="schip s-ok">✓ {p}</span>)}</div>}
@@ -182,6 +190,102 @@ function Baseline({ lab, running }) {
             <td><span className={`schip s-${r.change === "lost" ? "bad" : r.change === "gained" ? "ok" : "warn"}`}>{r.change}</span></td>
             <td className="mono small">{r.before || "–"}</td><td className="mono small">{r.after || "–"}</td></tr>)}</tbody></table>}
         {d.routes.length > 300 && <p className="hint">…and {d.routes.length - 300} more route changes.</p>}
+        {d.ifaces?.length > 0 && <table className="grid compact"><thead><tr><th>Port</th><th>Before</th><th>Now</th></tr></thead>
+          <tbody>{d.ifaces.map((p) => <tr key={p.port}><td className="mono">{p.port}</td><td>{p.before}</td><td><span className={`schip s-${p.after === "up" ? "ok" : "bad"}`}>{p.after}</span></td></tr>)}</tbody></table>}
+  </>);
+}
+
+const hhmmss = (t) => new Date(t * 1000).toLocaleTimeString();
+
+function TimeMachine({ lab, running }) {
+  const [tl, setTl] = useState(null);
+  const [sel, setSel] = useState(null);
+  const [pt, setPt] = useState(null);
+  const [cmp, setCmp] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const load = () => api.history(lab.name).then(setTl).catch(() => {});
+  useEffect(() => { setSel(null); setPt(null); setCmp(null); load(); }, [lab.name]); // eslint-disable-line
+  useInterval(load, running ? 30000 : 0, [lab.name, running]);
+  useEffect(() => {
+    const h = (e) => { if (e.detail?.lab === lab.name) api.historyAt(lab.name, e.detail.ts).then((r) => r.i != null && pick(r.i)).catch(() => {}); };
+    window.addEventListener("patchyard-timemachine", h);
+    return () => window.removeEventListener("patchyard-timemachine", h);
+  }); // eslint-disable-line
+  const pick = async (i) => {
+    setSel(i); setCmp(null); setPt(null);
+    try { setPt(await api.historyPoint(lab.name, i)); } catch (e) { setPt({ error: e.message }); }
+  };
+  const pts = tl?.points || [];
+  return (
+    <section className="dash-sec timemachine">
+      <h3>Time machine <span className="hint">{tl?.enabled === false ? "off (Settings)" : pts.length ? `${pts.length} change point${pts.length > 1 ? "s" : ""} · last check ${tl.sampled ? hhmmss(tl.sampled) : "–"}` : "records routes, neighbours and port states while the lab runs"}</span></h3>
+      {!pts.length && <div className="row"><span className="hint">{running ? `Nothing recorded yet: the first sample comes within ${tl?.interval || 30} s.` : "Deploy the lab to start recording."}</span>
+        {running > 0 && <button className="link" onClick={async () => { setBusy(true); await api.historyRecord(lab.name).catch(() => {}); await load(); setBusy(false); }} disabled={busy}>Record now</button>}</div>}
+      {pts.length > 0 && <>
+        <div className="tm-strip" role="listbox" aria-label="Change points">
+          {pts.map((p) => <button key={p.i} role="option" aria-selected={sel === p.i} className={`tm-pt ${sel === p.i ? "on" : ""} ${p.first ? "first" : ""}`}
+            title={`${hhmmss(p.ts)} · ${p.first ? "first sample" : p.summary}`} onClick={() => pick(p.i)} />)}
+        </div>
+        <ol className="tm-list">{[...pts].reverse().slice(0, 12).map((p) => (
+          <li key={p.i} className={sel === p.i ? "on" : ""}><button className="link" onClick={() => pick(p.i)}>{hhmmss(p.ts)}</button>
+            <span className="hint"> {p.first ? `first sample: ${p.routes} routes, ${p.ports_up} ports up` : p.summary}</span></li>))}</ol>
+      </>}
+      {pt?.error && <p className="error">{pt.error}</p>}
+      {pt && !pt.error && <div className="tm-detail">
+        <div className="row"><b>{hhmmss(pt.ts)}</b><span className="hint">{pt.prev_ts ? `what changed since ${hhmmss(pt.prev_ts)}` : "the first sample"}</span><span className="grow" />
+          <button disabled={!running || busy} onClick={async () => { setBusy(true); try { setCmp(await api.historyCompare(lab.name, sel)); } catch (e) { setCmp({ error: e.message }); } setBusy(false); }}>{busy ? "Comparing…" : "Compare with now"}</button></div>
+        {pt.prev_ts ? <DiffView d={pt.changes} /> : <p className="hint">{Object.values(pt.state.routes).reduce((n, r) => n + Object.keys(r).length, 0)} routes on {Object.keys(pt.state.routes).length} routers.</p>}
+        {cmp && (cmp.error ? <p className="error">{cmp.error}</p> : <><h4>From then to now</h4>
+          {!cmp.changes.routes.length && !cmp.changes.neighbours.length && !cmp.changes.ifaces.length ? <p className="ok-t">✓ The network is the same now.</p> : <DiffView d={cmp.changes} />}</>)}
+      </div>}
+    </section>
+  );
+}
+
+function Chaos({ lab, running }) {
+  const [j, setJ] = useState(null);
+  const [f, setF] = useState({ minutes: 10, every: 60, kinds: ["down"], exclude: [] });
+  const [err, setErr] = useState("");
+  const load = () => api.chaos(lab.name).then((x) => setJ(x && x.id ? x : null)).catch(() => {});
+  useEffect(() => { load(); }, [lab.name]); // eslint-disable-line
+  useInterval(load, j?.state === "running" ? 3000 : 0, [j?.state, lab.name]);
+  const on = j?.state === "running";
+  const kind = (k) => setF({ ...f, kinds: f.kinds.includes(k) ? f.kinds.filter((x) => x !== k) : [...f.kinds, k] });
+  const left = on ? Math.max(0, Math.round((j.ends - Date.now() / 1000) / 60)) : 0;
+  return (
+    <section className="dash-sec chaos">
+      <h3>Chaos mode <span className="hint">{on ? `running · ${left} min left` : "break cables at random and score how well the network copes"}</span></h3>
+      {!on && <>
+        <div className="formrow">
+          <label>For<span className="nowrap"><input className="narrow" value={f.minutes} onChange={(e) => setF({ ...f, minutes: e.target.value.replace(/\D/g, "") })} /> min</span></label>
+          <label>A fault about every<span className="nowrap"><input className="narrow" value={f.every} onChange={(e) => setF({ ...f, every: e.target.value.replace(/\D/g, "") })} /> s</span></label>
+          <label>Faults<div className="seg">{[["down", "Cable down"], ["loss", "40% loss"], ["delay", "300 ms delay"]].map(([k, l]) =>
+            <button key={k} type="button" className={f.kinds.includes(k) ? "on" : ""} onClick={() => kind(k)}>{l}</button>)}</div></label>
+        </div>
+        {lab.links.length > 0 && <details><summary className="hint">Leave some cables alone ({f.exclude.length})</summary>
+          <div className="chaos-ex">{lab.links.map((l) => <label key={l.id} className="chk"><input type="checkbox" checked={f.exclude.includes(l.id)}
+            onChange={(e) => setF({ ...f, exclude: e.target.checked ? [...f.exclude, l.id] : f.exclude.filter((x) => x !== l.id) })} /> {labIf(lab, l.a, l.a_if) ? `${l.a} ${labIf(lab, l.a, l.a_if)} ↔ ${l.b} ${labIf(lab, l.b, l.b_if)}` : l.id}</label>)}</div></details>}
+        <div className="row"><button className="primary" disabled={!running || !f.kinds.length} onClick={async () => {
+          setErr("");
+          try { setJ(await api.chaosStart(lab.name, { ...f, minutes: Number(f.minutes) || 10, every: Number(f.every) || 60 })); } catch (e) { setErr(e.message); }
+        }}><Icon name="zap" size={14} /> Start chaos</button>
+          {err && <span className="error">{err}</span>}
+          <span className="hint">Every PC and server is pinged from every other every 15 s. The score is how often the ones that worked before still did. Everything is put back at the end.</span></div>
+      </>}
+      {j && <>
+        <div className="row">
+          {j.score != null && <span className={`chaos-score ${j.score >= 95 ? "ok" : j.score >= 75 ? "warn" : "bad"}`}>{j.score}<small>%</small></span>}
+          <div className="grow">
+            <div><b>Resilience</b> <span className="hint">{j.samples.length} samples of {j.baseline_pairs ?? "…"} host pairs{j.state !== "running" ? ` · ${j.state}` : ""}</span></div>
+            {j.current && <div className="small">Now: <b>{j.current.link}</b> {j.current.what}</div>}
+          </div>
+          {on && <button className="danger" onClick={async () => setJ(await api.chaosStop(lab.name))}>Stop and repair</button>}
+        </div>
+        {j.samples.length > 0 && <div className="chaos-bars" aria-label="Samples">{j.samples.slice(-60).map((s) => (
+          <span key={s.t} className={s.ok === s.of ? "ok" : s.ok / s.of >= 0.5 ? "warn" : "bad"} style={{ height: `${Math.max(8, 100 * s.ok / s.of)}%` }}
+            title={`${hhmmss(s.t)}: ${s.ok}/${s.of} reachable${s.broken.length ? ` · broken: ${s.broken.join(", ")}` : ""}${s.fault ? ` · during ${s.fault.link} ${s.fault.what}` : ""}`} />))}</div>}
+        <ol className="tm-list">{[...j.events].reverse().slice(0, 10).map((e, i) => <li key={i}><span className="mono small">{hhmmss(e.t)}</span> <b>{e.link}</b> <span className="hint">{e.what}</span></li>)}</ol>
+        {j.error && <p className="error">{j.error}</p>}
       </>}
     </section>
   );
